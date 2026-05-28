@@ -1,0 +1,188 @@
+---
+title: "opal: the open population assessment library"
+date: last-modified
+date-format: "DD MMMM YYYY"
+author:
+  - name: "N. Ducharme-Barth"
+    affiliations:
+      - id: pifsc
+        name: "NOAA Fisheries, Pacific Islands Fisheries Science Center, 1845 Wasp Boulevard, Bldg. 176, Honolulu HI 96818"
+  - name: "D. Webber"
+    affiliations:
+      - id: quantifish
+        name: "Quantifish Limited, New Zealand"
+  - name: "P. Neubauer"
+    affiliations:
+      - id: dragonfly
+        name: "Dragonfly Data Science, Wellington, New Zealand"
+  - name: "K. Kim"
+    affiliations:
+      - id: spc
+        name: "Oceanic Fisheries Programme, Pacific Community, Noumea, New Caledonia"
+  - name: "A. Magnusson"
+    affiliations:
+      - ref: spc
+  - name: "P. Hamer"
+    affiliations:
+      - ref: spc
+meetingtype: "SCIENTIFIC COMMITTEE"
+meetingnumber: "TWENTY-SECOND REGULAR SESSION"
+meetinglocation: "Apia, Samoa"
+meetingdates: "11-19 August 2026"
+repnumber: WCPFC-SC22-2026/SA-IP-XX
+format:
+  pdf:
+    pdf-engine: pdflatex
+    template-partials:
+      - before-body.tex
+    documentclass: SCreport
+    fontsize: 11pt
+    geometry:
+      - margin=1in
+    toc: true
+    number-sections: true
+    link-citations: true
+    colorlinks: true
+    linkcolor: SCblue
+    filecolor: SCblue
+    urlcolor: SCblue
+    citecolor: SCblue
+    toccolor: SCblue
+    highlight-style: github
+    code-block-bg: "#f6f8fa"
+    code-block-border-left: "#c5c5c5"
+    code-font: "Consolas, Monaco, 'Andale Mono', monospace"
+    filters:
+      - inline-code.lua
+    header-includes: |
+     \usepackage{draftwatermark}
+     \usepackage{pdflscape}
+     \providecommand{\citeproc}[2]{#2}
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    link-citations: true
+    colorlinks: true
+    highlight-style: github
+    self-contained: true
+execute:
+  warning: false
+  message: false
+bibliography: opal.bib
+csl: apa.csl
+
+---
+
+```{=html}
+<style>
+.draft-watermark {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-45deg);
+  font-size: 100px;
+  font-weight: bold;
+  color: #ccc;
+  opacity: 0.5;
+  z-index: -1000;
+  pointer-events: none;
+}
+</style>
+<div class="draft-watermark">DRAFT</div>
+```
+
+\newpage
+
+# Introduction {#sec-introduction}
+
+open, modular R package for fisheries stock assessment built on RTMB for automatic differentiation and gradient-based optimization
+Builds upon the sbt R package developed by Quantifish NZ for the assessment of southern bluefin tuna by CCSBT
+Draws influence from SPoRC, WHAM, Stock Synthesis & Multifan-CL
+
+Provide a flexible modelling framework to assessment scientists capable of:
+Estimating random effects
+Facilitate enhanced model diagnostics
+One-step-ahead (OSA) residuals
+Simulation self-test
+Posterior predictive checks
+Directly integrating into a Bayesian estimation framework
+
+opal  is being developed under the umbrella of WCPFC Project 123: Scoping the next generation of tuna stock assessment software
+Open collaboration between SPC, IATTC, NOAA Fisheries and other interested parties
+
+
+
+# Model structure {#sec-model-structure}
+
+estimate age-structured population dynamics with length-based processes
+
+Fit to multiple data types: CPUE, length composition and weight composition data
+
+Accommodate population demographics in terms of age or length
+
+Allows for the specification of random effects
+
+## Population dynamics {#sec-population-dynamics}
+
+## Likelihood components {#sec-likelihood-components}
+
+Supports multiple likelihood options: log-normal CPUE, and multinomial, Dirichlet, and Dirichlet-multinomial length & weight composition likelihoods
+
+# Features {#sec-features}
+
+### Projections {#sec-projections}
+
+Catch based population projections
+
+### Bayesian inference {#sec-bayesian-inference}
+
+Incorporate prior information either in a penalized maximum likelihood estimation (MLE) approach or through direct Bayesian inference via SparseNUTS
+
+### Model diagnostics {#sec-model-diagnostics}
+
+estimability checks, parameter correlations, simulation self-test & one-step-ahead residuals
+
+# Case studies {#sec-case-studies}
+
+## 2020 WCPO bigeye tuna {#sec-case-bet}
+
+Currently implemented as age-structured production model (ASPM) with selectivity fixed and only fitting to the CPUE index
+
+## Hawai'i 'Opakapaka {#sec-case-paka} 
+
+Simulation example where "truth" is known
+3 fisheries
+Fits to two CPUE indices (with negligible observation error) & length composition data
+Estimates population scale, recruitment deviations, initial age structure, and some selectivity parameters
+
+Able to match the "true" simulated population dynamics from the Stock Synthesis operating model and producing a closer fit than the equivalent Stock Synthesis estimation model
+
+recover the "true" parameter values within the estimated uncertainty intervals
+
+
+# Discussion {#sec-discussion}
+
+## Future development {#sec-future-development}
+
+# Acknowledgements {#sec-acknowledgements}
+
+Development of opal is intended to be an open and collaborative effort, inclusive to the broader fisheries assessment community. To that end we are grateful to the many people that contributed to the project through informal discussions, and participation in periodic update meetings. While not an exhaustive list, this community includes: N. Davies (Te Takina Ltd), S. Hoyle (Hoyle Consulting), M. Maunder (Inter-American Tropical Tuna Commission), R. Bi (IATTC), F. Carvalho (PIFSC), G. Pilling (SPC), J. Hampton (SPC *emeritus*), and many others including participants in the 2025 CAPAM mini workshop on developing the next generation tuna stock assessment model as well as the 2026 SPC Pre-Assessment Workshop.
+
+# Declaration of generative AI use {#sec-ai-declaration}
+
+Generative AI tools were used to assist with code development, refactoring, and documentation, and with drafting and editing text in this document. All analytical choices, model specifications, diagnostic interpretations, and conclusions are those of the authors, who reviewed and verified all AI-assisted output.
+
+# References {#sec-references}
+
+::: {#refs}
+:::
+
+\newpage
+
+# Tables {#sec-tables}
+
+
+\newpage
+
+# Figures {#sec-figures}
