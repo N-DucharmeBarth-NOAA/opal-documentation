@@ -112,29 +112,153 @@ The model is implemented as a single objective function, `opal_model()`, that re
 
 ## Population dynamics {#sec-population-dynamics}
 
-The population is structured by year, season, and age, and may be configured for any number of fisheries. Mean length-at-age is computed from a Schnute parameterization of the von Bertalanffy growth function, anchored by lengths at two reference ages, which matches the formulation used by SS3 under its growth pattern with a linearly interpolated coefficient of variation [@methot_stock_2013]. The standard deviation of length-at-age is obtained by linearly interpolating the coefficient of variation between the two reference lengths. From the mean and standard deviation of length-at-age, the PLA matrix gives the probability that an individual of a given age falls within each length bin; this matrix is computed once per function evaluation and reused for the conversion of weight, maturity, fecundity, and selectivity between the length and age bases. The PLA is constructed by integrating the normal distribution of length-at-age over the length-bin edges [@methot_stock_2013; @zhang_age_2022].
+The population is structured by year, season, and age, and may be configured for any number of fisheries.
 
-Weight-at-length is derived from an allometric length-weight relationship and converted to weight-at-age through the PLA, or supplied directly as an age- or length-basis vector. Maturity- and fecundity-at-age are obtained analogously, and their product defines the spawning potential at age used in the calculation of spawning biomass. All derived biology arrays are passed explicitly to the dynamics routine rather than read from the data object, so that automatic-differentiation gradients propagate correctly if any of these quantities are estimated (for example, growth parameters estimated through the PLA, or natural mortality specified as a function of length).
+### Growth and the probability of length-at-age {#sec-growth-pla}
 
-The dynamics routine initializes the population at an unfished or fished equilibrium derived from unfished spawning biomass and stock-recruitment steepness, optionally modified by estimated initial age-structure deviations. It then projects numbers-at-age forward, applying natural mortality and fishery removals within each year and season. Removals follow the Baranov catch equation, with age- and fishery-specific harvest rates computed from selectivity, weight-at-age, and observed catch. A penalty function (`posfun`) constrains harvest rates to remain within feasible bounds and contributes a penalty term to the objective function when that constraint becomes active [CITE: posfun penalty, cf. ADMB/SS3 convention]. The routine returns numbers-at-age, predicted catch-at-age by fishery, harvest rates, and the spawning-biomass time series for both the exploited and unfished populations, the ratio of which defines dynamic depletion.
+Mean length-at-age, $\mu_a$, is computed from a Schnute parameterization of the von Bertalanffy growth function, anchored by the lengths $L_1$ and $L_2$ at two reference ages $A_1$ and $A_2$, which matches the SS3 growth pattern with a linearly interpolated coefficient of variation [@methot_stock_2013]:
 
-Recruitment is modelled as a Beverton-Holt stock-recruitment relationship parameterized by unfished spawning biomass and steepness, with annual log-normal recruitment deviations. The lognormal bias-correction term applied to the deviations is modulated by a bias-adjustment ramp that reduces the correction in years where recruitment is poorly informed by data, following the approach used in SS3 [@methot_stock_2013]. Recruitment deviations may be treated as fixed effects (penalized maximum likelihood) or as random effects.
+$$
+\mu_a = L_1 + (L_2 - L_1)\,\frac{1 - e^{-k(a - A_1)}}{1 - e^{-k(A_2 - A_1)}}.
+$$
+
+*Module: `get_growth()`*
+
+The coefficient of variation is interpolated linearly with mean length between the two reference ages, and the standard deviation of length-at-age is its product with the mean:
+
+$$
+\mathrm{CV}_a = \mathrm{CV}_1 + \frac{\mu_a - L_1}{L_2 - L_1}\,(\mathrm{CV}_2 - \mathrm{CV}_1),
+\qquad
+\sigma_a = \mu_a\,\mathrm{CV}_a.
+$$
+
+*Module: `get_sd_at_age()`*
+
+From $\mu_a$ and $\sigma_a$, the probability-of-length-at-age (PLA) matrix gives the probability that an individual of age $a$ falls within length bin $\ell$, assuming length-at-age is normally distributed. For contiguous bins with edges $\{e_\ell\}$, this is the difference of the normal cumulative distribution function $\Phi$ evaluated at the bin edges:
+
+$$
+P_{\ell a} = \Phi\!\left(\frac{e_{\ell+1} - \mu_a}{\sigma_a}\right) - \Phi\!\left(\frac{e_{\ell} - \mu_a}{\sigma_a}\right),
+\qquad \sum_\ell P_{\ell a} = 1 .
+$$
+
+*Module: `get_pla()`*
+
+The PLA is computed once per function evaluation and reused for the conversion of weight, maturity, fecundity, natural mortality, and selectivity between the length and age bases.
+
+### Biology and spawning potential {#sec-biology}
+
+Quantities defined on a length basis are mapped to age through the PLA. For a length-basis vector $x_\ell$, the age-basis vector is $x_a = \sum_\ell P_{\ell a}\, x_\ell$ (equivalently $\mathbf{x}_a = \mathbf{P}^{\top}\mathbf{x}_\ell$); a vector supplied on an age basis is used directly. Weight-at-length follows an allometric length-weight relationship, $w_\ell = \alpha_{\mathrm{LW}}\, m_\ell^{\beta_{\mathrm{LW}}}$, where $m_\ell$ is the bin midpoint, and is converted to weight-at-age through the PLA. Spawning potential at age is the product of sex ratio (the fraction mature-female-equivalent at age), maturity, and fecundity:
+
+$$
+\psi_a = r_a\, m_a\, f_a ,
+$$
+
+*Modules: `get_weight_at_length()`, `get_maturity_at_age()`, `resolve_bio_vector()`*
+
+where $r_a$, $m_a$, and $f_a$ are sex ratio, maturity, and fecundity at age, respectively. Alternatively, a pre-computed spawning-potential vector may be supplied directly. All derived biology arrays are passed explicitly to the dynamics routine rather than read from the data object, so that automatic-differentiation gradients propagate correctly if any of these quantities are estimated (for example, growth parameters estimated through the PLA, or natural mortality specified as a function of length).
+
+### Initial conditions {#sec-initial-conditions}
+
+The population is initialized at the unfished equilibrium. Unfished survivorship-per-recruit accumulates natural mortality across ages with a plus-group at the oldest age, $\phi_a^{0} = \phi_{a-1}^{0}\,e^{-M_{a-1}}$ with $\phi_{n}^{0}$ divided by $1 - e^{-M_{n}}$, and the unfished spawners-per-recruit is $\Phi_0 = \sum_a \psi_a\, \phi_a^{0}$. Unfished recruitment and the Beverton-Holt parameters follow from unfished spawning biomass $B_0$ and steepness $h$:
+
+$$
+R_0 = \frac{B_0}{\Phi_0},
+\qquad
+a_{\mathrm{BH}} = \frac{4 h R_0}{5h - 1},
+\qquad
+b_{\mathrm{BH}} = \frac{B_0 (1 - h)}{5h - 1}.
+$$
+
+*Module: `get_initial_numbers()`*
+
+When initial fishing mortality is specified, survivorship is recomputed with total mortality $Z_a = M_a + \sum_f F_f^{\mathrm{init}} s_{f,a}$, giving a fished spawners-per-recruit $\Phi_{\mathrm{eq}}$ and an equilibrium recruitment $R_{\mathrm{eq}} = a_{\mathrm{BH}} - b_{\mathrm{BH}}/\Phi_{\mathrm{eq}}$. Initial numbers-at-age are $N_a^{\mathrm{init}} = R_{\mathrm{eq}}\,\phi_a$, optionally modified by estimated initial age-structure deviations with the lognormal bias correction described below.
+
+### Harvest and the forward projection {#sec-harvest}
+
+The population is projected forward over years and seasons. Within each season, survival from natural mortality is $S_a = e^{-M_a / n_{\mathrm{season}}}$. Removals are taken as a harvest fraction rather than a continuous fishing-mortality rate. For each fishery with observed catch, a fully selected harvest rate is obtained by dividing the observed catch by the available biomass (or available numbers, depending on the catch units of the fishery),
+
+$$
+F_{f} = \frac{C_{f}}{\sum_a N_a\, s_{f,a}\, w_{f,a} + \varepsilon},
+\qquad
+h_{f,a} = F_{f}\, s_{f,a},
+$$
+
+*Module: `get_harvest_rate()`*
+
+where $s_{f,a}$ is selectivity-at-age, $w_{f,a}$ is weight-at-age, and $\varepsilon$ is a small constant guarding the denominator. The total harvest rate at age is the sum over fisheries, $h_a = \sum_f h_{f,a}$, and predicted catch-at-age is $\hat{C}_{f,a} = h_{f,a} N_a$. To keep the combined harvest fraction feasible, the quantity $1 - \sum_f F_f$ is passed through a differentiable lower-bound function (`posfun`) that returns the argument where it exceeds a small threshold and otherwise smoothly approaches that threshold, adding the resulting penalty to the objective function.
+
+Surviving numbers are advanced by age and season, with recruitment entering the first age class at the start of each year, and the plus-group accumulating survivors from the oldest two age classes. Spawning biomass is $\mathrm{SB}_y = \sum_a N_{y,a}\, \psi_a$. The routine returns numbers-at-age, predicted catch-at-age by fishery, harvest rates, and the spawning-biomass time series for both the exploited and the dynamic unfished populations; their ratio defines dynamic depletion, $\mathrm{SB}_y / \mathrm{SB}_y^{0}$.
+
+### Recruitment {#sec-recruitment}
+
+Recruitment follows a Beverton-Holt stock-recruitment relationship with annual log-normal deviations $\varepsilon_y$:
+
+$$
+R_y = \frac{a_{\mathrm{BH}}\, \mathrm{SB}_y}{b_{\mathrm{BH}} + \mathrm{SB}_y}\; \exp\!\left(\varepsilon_y - \tfrac{1}{2}\, b_y\, \sigma_r^2\right),
+$$
+
+*Module: `get_recruitment()`*
+
+where $\sigma_r$ is the standard deviation of the deviations and $b_y$ is a year-specific bias-adjustment scalar. The lognormal bias-correction term $\tfrac{1}{2} b_y \sigma_r^2$ is modulated by a bias-adjustment ramp that reduces the correction in years where recruitment is poorly informed by the data, following the approach used in SS3 [@methot_stock_2013]. Recruitment deviations may be treated as fixed effects (penalized maximum likelihood) or as random effects.
 
 ## Likelihood components {#sec-likelihood-components}
 
 The total objective function is the sum of the data likelihoods, the recruitment-deviation penalty (or random-effect contribution), parameter priors, and the harvest-rate penalty. Each data likelihood is controlled by a switch in the data object, so that any combination of CPUE, length composition, and weight composition data may be included or excluded without altering the model code.
 
-Relative abundance is fitted with a log-normal likelihood. The CPUE component (`get_cpue_like()`) supports one or more standardized indices, each with its own catchability, additional observation variance, a power parameter relating the index to biomass, and an effort-creep term; predicted index values are mean-centred within each index prior to comparison with the observations.
+### Abundance indices {#sec-abundance-indices}
 
-Length and weight composition data are fitted with a choice of likelihoods selected by the corresponding switch: a multinomial likelihood, a Dirichlet likelihood, and a Dirichlet-multinomial likelihood [CITE: Dirichlet-multinomial composition likelihood, e.g. Thorson et al. 2017]. Predicted compositions are obtained by converting predicted catch-at-age to a length (or weight) basis through the PLA and, for weight composition, an additional length-to-weight rebinning matrix. The composition likelihood for length data is evaluated as a batched matrix operation over the observations of each fishery, which reduces the size of the automatic-differentiation tape relative to a per-observation loop.
+Relative abundance is fitted with a log-normal likelihood. The CPUE component (`get_cpue_like()`) supports one or more standardized indices, each with its own catchability $q$, additional observation variance, a power parameter $\omega$ relating the index to biomass, and a cumulative effort-creep term $\kappa$. For an observation in index $j$, the predicted index is formed from the vulnerable abundance $\tilde{N}$ associated with that observation,
 
-Prior information is incorporated through a flexible prior specification (`evaluate_priors()`) that applies parametric priors to named parameters, together with the recruitment-deviation prior (`get_recruitment_prior()`). These contributions allow the model to be fitted either as a penalized maximum likelihood problem or as a Bayesian model (@sec-bayesian-inference).
+$$
+\log \hat{I} = \log q + \omega\, \log \tilde{N} + \log \kappa ,
+$$
+
+*Module: `get_cpue_like()`*
+
+and is then mean-centred across the observations of each index before comparison with the data. Observation and process variability are combined in quadrature, $\sigma = \sqrt{\sigma_{\mathrm{obs}}^2 + \tau^2}$, where $\sigma_{\mathrm{obs}}$ is the input standard error of the observation and $\tau$ is an estimable additional standard deviation, and the contribution to the negative log-likelihood is
+
+$$
+-\log \mathcal{L} = -\sum_i \log \phi\!\left(\log I_i \,\middle|\, \log \hat{I}_i,\, \sigma_i\right),
+$$
+
+with $\phi(\cdot)$ the normal density.
+
+### Composition data {#sec-composition-data}
+
+Length and weight composition data are fitted with a choice of likelihoods selected by the corresponding switch: a multinomial, a Dirichlet, or a Dirichlet-multinomial likelihood. Predicted compositions are obtained by converting predicted catch-at-age $\hat{C}_{f,a}$ to a length basis through the PLA (and, for weight composition, an additional length-to-weight rebinning matrix $\mathbf{G}$):
+
+$$
+\hat{p}_{f,\ell} \,\propto\, \sum_a P_{\ell a}\, \hat{C}_{f,a}
+\qquad\text{(length)},
+\qquad
+\hat{p}_{f,k} \,\propto\, \sum_{\ell, a} G_{k\ell}\, P_{\ell a}\, \hat{C}_{f,a}
+\qquad\text{(weight)} .
+$$
+
+*Modules: `get_length_like()`, `get_weight_like()`*
+
+Predicted proportions are aggregated into the active bin range for the fishery, with the tails optionally accumulated into the minimum and maximum bins, then a small robustness constant is added and the vector is renormalized to sum to one. For observation $i$ of fishery $f$ with observed sample size $n_i$, the three likelihood options are
+
+$$
+-\log \mathcal{L}_i =
+\begin{cases}
+-\log \mathrm{Multinomial}(\mathbf{o}_i \mid \hat{\mathbf{p}}_i), & \text{multinomial},\\[4pt]
+-\log \mathrm{Dirichlet}(\mathbf{o}_i \mid \hat{\mathbf{p}}_i\, n_i\, e^{\tau_f}), & \text{Dirichlet},\\[4pt]
+-\log \mathrm{DirMult}(\mathbf{o}_i \mid n_i,\, \hat{\mathbf{p}}_i\, e^{\tau_f}), & \text{Dirichlet-multinomial},
+\end{cases}
+$$
+
+where $\mathbf{o}_i$ is the observed composition (counts for the multinomial and Dirichlet-multinomial, proportions for the Dirichlet) and $\tau_f$ is a fishery-specific log-scale variance-adjustment parameter that scales the effective sample size. The composition likelihood is evaluated as a batched matrix operation over the observations of each fishery rather than a per-observation loop, which reduces the size of the automatic-differentiation tape.
+
+### Priors and penalties {#sec-priors-penalties}
+
+Prior information is incorporated through a flexible prior specification (`evaluate_priors()`) that applies parametric priors to named parameters, together with the recruitment-deviation contribution (`get_recruitment_prior()`), which by default is a normal density on the deviations with standard deviation $\sigma_r$. These contributions allow the model to be fitted either as a penalized maximum likelihood problem or as a Bayesian model (@sec-bayesian-inference).
 
 # Features {#sec-features}
 
 ### Projections {#sec-projections}
 
-`opal` supports catch-based forward projection of the population from an estimated or sampled set of parameters. Projections are conditioned on a specified future catch and propagate parameter uncertainty into the projected quantities. Two approaches to characterizing uncertainty in the projections are available: resampling from a multivariate normal approximation to the joint parameter distribution at the mode, and propagation of a posterior sample obtained by Markov chain Monte Carlo (MCMC; @sec-bayesian-inference). Both approaches yield distributions of projected spawning biomass and depletion under the specified catch scenario.
+`opal` supports catch-based forward projection of the population from an estimated set of parameters. Projections are conditioned on a specified future catch and propagate parameter uncertainty into the projected quantities. Two approaches to characterizing uncertainty in the projections are available: resampling from a multivariate normal approximation to the joint parameter distribution at the mode, and propagation of a posterior sample obtained by Markov chain Monte Carlo (MCMC; @sec-bayesian-inference). Both approaches yield distributions of projected spawning biomass and depletion under the specified catch scenario.
 
 ### Bayesian inference {#sec-bayesian-inference}
 
@@ -142,7 +266,7 @@ Prior information can be incorporated either through a penalized maximum likelih
 
 ### Model diagnostics {#sec-model-diagnostics}
 
-`opal` provides a set of built-in diagnostics intended to support model evaluation and validation. These include estimability checks and parameter-correlation summaries derived from the fitted model; simulation self-testing, in which data are simulated from the model and re-estimated to confirm that parameters can be recovered; and one-step-ahead (OSA) residuals, computed through RTMB's `oneStepPredict()`, which provide residuals that are independent and identically distributed under a correctly specified model and are therefore more readily interpretable than ordinary residuals for non-Gaussian observations [@kristensen_tmb_2016]. The simulation and posterior-predictive capabilities also support the projection and Bayesian workflows described above.
+`opal` provides a set of built-in diagnostics intended to support model evaluation and validation. These include estimability checks and parameter-correlation summaries derived from the fitted model; simulation self-testing, in which data are simulated from the model and re-estimated to confirm that parameters can be recovered; posterior-predictive checking where the observations are compared to the simulated distributions of the predictions given the model and one-step-ahead (OSA) residuals, computed through RTMB's `oneStepPredict()`, which provide residuals that are independent and identically distributed under a correctly specified model and are therefore more readily interpretable than ordinary residuals for non-Gaussian observations [@kristensen_tmb_2016]. The simulation and posterior-predictive capabilities also support the projection and Bayesian workflows described above.
 
 # Case studies {#sec-case-studies}
 
@@ -150,13 +274,13 @@ Two case studies are distributed with the package as worked examples. The first 
 
 ## 2020 WCPO bigeye tuna {#sec-case-bet}
 
-The first case study uses the data from the 2020 assessment of bigeye tuna (*Thunnus obesus*) in the western and central Pacific Ocean [@ducharme-barth_stock_2020]. The bundled data object contains the biological parameters, catch and standardized CPUE observations, length and weight composition data, and prior specifications for the assessment, configured at a quarterly time step across the fisheries defined in the original assessment, with selectivity specified by fishery as either logistic or double-normal forms.
+The first case study uses the data from a fleets-as-areas model described in the appendix of the 2020 assessment of bigeye tuna (*Thunnus obesus*) in the western and central Pacific Ocean [@ducharme-barth_stock_2020]. The bundled data object contains the biological parameters, catch and standardized CPUE observations, length and weight composition data, configured at a quarterly time step across the fisheries defined in the fleets-as-areas assessment, with selectivity specified by fishery as either logistic or double-normal forms.
 
 In its current configuration, this case study is implemented as an age-structured production model (ASPM): selectivity is held fixed at values converted from the original assessment, and the model is fitted to the standardized CPUE index only, with the size-composition likelihoods switched off. Model fit is evaluated using the OSA residuals of the CPUE index (@sec-model-diagnostics). Fitting to the size-composition data within this configuration is an area of ongoing development (@sec-future-development).
 
 ## Hawai'i 'Opakapaka {#sec-case-paka}
 
-The second case study uses simulated data for Hawaiian 'opakapaka (*Pristipomoides filamentosus*), a deepwater snapper, for which the true population dynamics are known. The reference model was constructed in SS3 [v3.30.19\; @methot_stock_2013] as part of an associated simulation study [@oshima_opakapaka_2026], which provides both an operating model that generates the data and an estimation model fitted to those data. The `opal` model covers the historical period 1949--2023 with three fleets --- a commercial fishery, a non-commercial fishery, and a research-fishery survey --- at an annual time step, and fits to two CPUE indices, generated with negligible observation error, together with length composition data from the commercial and survey fleets.
+The second case study uses simulated data for Hawai'i 'opakapaka (*Pristipomoides filamentosus*), a deepwater snapper, for which the true population dynamics are known. The reference model was constructed in SS3 [v3.30.19\; @methot_stock_2013] as part of an associated simulation study [@oshima_opakapaka_2026], which provides both an operating model that generates the data and an estimation model fitted to those data. The `opal` model covers the historical period 1949--2023 with three fleets --- a commercial fishery, a non-commercial fishery, and a research-fishery survey --- at an annual time step, and fits to two CPUE indices, generated with negligible observation error, together with length composition data from the commercial and survey fleets.
 
 The case study is configured to estimate population scale, annual recruitment deviations, initial age structure, and selectivity parameters for the fleets that have length composition data, with the remaining life-history and fishery parameters fixed at the values used to generate the simulated data. Because the operating model is built in SS3, the case study also serves as a cross-platform comparison: it provides a basis for evaluating the correspondence between the `opal` and SS3 population-dynamics calculations under identical inputs, and for comparing the spawning-biomass trajectory and parameter estimates from `opal` against the operating-model truth and the SS3 estimation model.
 
@@ -172,7 +296,7 @@ Software development follows a defined contribution workflow. The package uses a
 
 Integrated testing operates at several levels. Unit tests verify the behaviour of individual modules; for example, the growth tests confirm that `get_growth()` returns the reference lengths at the reference ages and is monotonic, and that the weight, maturity, and PLA conversions behave as expected. Integration tests verify that the modules combine correctly within the full `opal_model()` objective function and that the objective and its gradient are finite when particular data and likelihood components are active. A numerical-regression baseline (`opal_baseline`), produced and checked through a dedicated vignette, stores a complete reference evaluation of the bigeye case-study model --- the objective value, the gradient, the report output, and timing --- so that a refactored build can be compared against the reference to detect unintended numerical changes and performance regressions. Continuous-integration checks (`R-CMD-check`) are run automatically on the repository.
 
-Several extensions are planned. Priorities identified for ongoing work include refinement of the case studies; code optimization, particularly of the selectivity and size-composition likelihood calculations; and additional functionality such as biological and fishery reference points, alternative selectivity forms, and conditional age-at-length data [CITE: conditional age-at-length, e.g. @zhang_age_2022]. Within the WCPFC context, planned work also includes a side-by-side comparison of MULTIFAN-CL [@fournier_multifan-cl_1998], SS3 [@methot_stock_2013], and `opal` for a WCPO bigeye tuna fleets-as-areas model, an Indian Ocean yellowfin tuna fleets-as-areas case study based on simulated data, and application to the 2027 North Pacific blue shark stock assessment.
+Several extensions are planned. Priorities identified for ongoing work include refinement of the case studies; code optimization, particularly of the selectivity and size-composition likelihood calculations; and additional functionality such as biological and fishery reference points, alternative selectivity forms, and conditional age-at-length data. Within the WCPFC context, planned work also includes a side-by-side comparison of MULTIFAN-CL [@fournier_multifan-cl_1998], SS3 [@methot_stock_2013], and `opal` for a WCPO bigeye tuna fleets-as-areas model, an Indian Ocean yellowfin tuna fleets-as-areas case study based on simulated data, and potential application to the 2027 North Pacific blue shark stock assessment.
 
 # Acknowledgements {#sec-acknowledgements}
 
