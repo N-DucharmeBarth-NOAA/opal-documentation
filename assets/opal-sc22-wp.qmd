@@ -29,7 +29,7 @@ meetingtype: "SCIENTIFIC COMMITTEE"
 meetingnumber: "TWENTY-SECOND REGULAR SESSION"
 meetinglocation: "Apia, Samoa"
 meetingdates: "11-19 August 2026"
-repnumber: WCPFC-SC22-2026/SA-IP-XX
+repnumber: WCPFC-SC22-2026/SA-WP-XX
 format:
   pdf:
     pdf-engine: pdflatex
@@ -91,6 +91,240 @@ csl: apa.csl
 </style>
 <div class="draft-watermark">DRAFT</div>
 ```
+
+```{r}
+#| label: setup-opal
+#| include: false
+# renv::restore(prompt = FALSE)   # optional: reproduce library from renv.lock
+
+library(opal)    # pinned to commit 32239a3 via renv.lock
+library(RTMB)
+library(tidyverse)
+
+theme_set(theme_bw())
+```
+
+```{r}
+#| label: paka-lf-fit
+#| echo: false
+#| results: hide
+
+## ---- Cache location ------------------------------------------------------
+# Anchor to the document directory so the path resolves identically whether
+# Quarto's execution-dir is the file's directory (default) or the project root.
+# The qmd lives in assets/, so this resolves to assets/cached/opakapaka/.
+doc_dir <- tryCatch(
+  dirname(knitr::current_input(dir = TRUE)),
+  error = function(e) "."
+)
+paka_cache_dir <- file.path(doc_dir, "assets","cached", "opakapaka")
+dir.create(paka_cache_dir, recursive = TRUE, showWarnings = FALSE)
+paka_fit_path  <- file.path(paka_cache_dir, "opal_lf_fit.rds")
+
+## ---- Fit + diagnostics (fully cached) ------------------------------------
+# On a cache hit nothing from opal/RTMB is rebuilt: the document consumes only
+# the plain-R results bundle (`paka`). The model is built, fitted, and
+# summarised solely when the cache is absent. (R ignores indentation, so the
+# pipeline below is left un-indented inside the else for a smaller diff.)
+if (file.exists(paka_fit_path)) {
+  paka <- readRDS(paka_fit_path)
+} else {
+
+## ---- Data ----------------------------------------------------------------
+data(opaka_data)
+data <- opaka_data
+if (is.null(data$n_index)) data$n_index <- 2L
+data$priors <- NULL
+
+# SS3 indexes ages 0--43; anchor the Schnute growth curve at biological age 0.
+data$A1      <- 0
+data$A2      <- data$A1 + (data$n_age - 1)
+data$min_age <- 0
+data$age_a   <- seq(data$min_age, by = 1, length.out = data$n_age)
+
+# Sex ratio set to 1 at all ages (B0 is already female-only spawning biomass).
+data$sex_ratio <- rep(1, data$n_age)
+
+## ---- Length composition data ---------------------------------------------
+data(opaka_lf)
+lf_wide <- opaka_lf %>%
+  tidyr::pivot_wider(
+    id_cols     = c(fishery, year, month, ts),
+    names_from  = bin,
+    values_from = value,
+    values_fill = 0
+  ) %>%
+  arrange(fishery, ts)
+
+var_adjust_scalars <- 1 / rep(1, data$n_fishery)
+data <- prep_lf_data(data, lf_wide,
+                     lf_keep_fisheries = c(1, 3),   # Comm + ResFish
+                     lf_var_adjust     = var_adjust_scalars,
+                     lf_addtocomp      = 1e-10)
+
+## ---- SS3-style recruitment bias-adjustment ramps -------------------------
+init_cohort_years <- 1949 - (data$age_a - 1)
+data$init_bias_adj_a <- get_bias_adj_vector(
+  years            = init_cohort_years,
+  do_rec_bias_ramp = 1,
+  bias_years       = c(1931, 1974, 2021.88, 2022.43),
+  max_bias_adj     = 0.869
+)
+
+calendar_years <- (1949 - 1) + data$years   # 1949--2023
+data$bias_adj_y <- get_bias_adj_vector(
+  years            = calendar_years,
+  do_rec_bias_ramp = 1,
+  bias_years       = c(1931, 1974, 2021.88, 2022.43),
+  max_bias_adj     = 0.869
+)
+
+## ---- Parameters ----------------------------------------------------------
+data(opaka_parameters)
+
+# 1949 dev seeds the initial age-0 cohort; later years shift into rdev_y.
+init_rdev_a <- rev(c(
+  0.0206807, 0.00321579, 0.00372620, 0.0043174, 0.00500263, 0.00579674,
+  0.00671727, 0.00778422, 0.00902081, 0.0104539, 0.0121143, 0.0140375,
+  0.0162641, 0.0188404, 0.0218182, 0.0252561, 0.0292182, 0.0337726,
+  0.0389898, 0.0449362, 0.0516662, 0.0592049, 0.0675236, 0.0764992,
+  0.0858443, 0.0950047, 0.102706, 0.107687, 0.107712, 0.0998349,
+  0.0808137, 0.0482339, 0.00234443, -0.0517563, -0.102395, -0.131458,
+  -0.121101, -0.0714826, -0.00742166, -0.0109308, -0.0385029, 0.0366483,
+  0.0165105, -0.166906
+))
+init_rdev_a[1] <- opaka_parameters$rdev_y[1]
+rdev_y_shifted <- c(opaka_parameters$rdev_y[2:length(opaka_parameters$rdev_y)], 0.0)
+
+parameters <- list(
+  log_B0         = 9,
+  log_h          = as.numeric(opaka_parameters$log_h),
+  log_sigma_r    = as.numeric(opaka_parameters$log_sigma_r),
+  log_cpue_q     = as.numeric(opaka_parameters$log_cpue_q),
+  log_cpue_tau   = rep(log(0.1), data$n_index),
+  log_cpue_omega = as.numeric(rep(opaka_parameters$log_cpue_omega, data$n_index)),
+  log_lf_tau     = as.numeric(log(rep(0.1, data$n_fishery))),
+  log_L1         = as.numeric(opaka_parameters$log_L1),
+  log_L2         = as.numeric(opaka_parameters$log_L2),
+  log_k          = as.numeric(opaka_parameters$log_k),
+  log_CV1        = as.numeric(opaka_parameters$log_CV1),
+  log_CV2        = as.numeric(opaka_parameters$log_CV2),
+  par_sel        = as.matrix(opaka_parameters$par_sel),
+  log_init_F_f   = c(log(0.0119122), rep(log(1e-8), data$n_fishery - 1)),
+  rdev_y         = rdev_y_shifted,
+  init_rdev_a    = init_rdev_a
+)
+parameters$par_sel <- convert_ss3_selex_to_rtmb(
+  parameters$par_sel, data$sel_type_f, data$len_mid
+)
+
+## ---- Priors --------------------------------------------------------------
+data$priors <- get_priors(parameters = parameters, data = data)
+
+## ---- Base map ------------------------------------------------------------
+map_sel_base    <- as.vector(matrix(NA, nrow(parameters$par_sel),
+                                     ncol(parameters$par_sel)))
+map_lf_tau_base <- rep(NA, length(parameters$log_lf_tau))
+
+map <- list(
+  log_h          = factor(NA),
+  log_sigma_r    = factor(NA),
+  log_cpue_tau   = as.factor(rep(NA, data$n_index)),
+  log_cpue_omega = as.factor(rep(NA, data$n_index)),
+  log_lf_tau     = factor(map_lf_tau_base),
+  log_L1         = factor(NA),
+  log_L2         = factor(NA),
+  log_k          = factor(NA),
+  log_CV1        = factor(NA),
+  log_CV2        = factor(NA),
+  par_sel        = factor(map_sel_base),
+  log_init_F_f   = rep(factor(NA), data$n_fishery),
+  init_rdev_a    = as.factor(seq_len(data$n_age)),
+  rdev_y         = as.factor(seq_len(length(parameters$rdev_y)))
+)
+
+## ---- opal (with LF): data, map, AD object --------------------------------
+# Turn on the multinomial length-composition likelihood and free selectivity
+# for the two fleets with LF data (Comm: two logistic params; ResFish: three
+# of the six double-normal params). CPUE remains in the likelihood.
+data_lf <- data
+data_lf$sel_fa_external <- NULL    # estimate selectivity, no external override
+data_lf$lf_switch       <- 1L
+
+map_sel <- matrix(NA, nrow(parameters$par_sel), ncol(parameters$par_sel))
+map_sel[1, 1:2]       <- c(1, 2)         # Comm (fleet 1) logistic
+map_sel[3, c(1, 4, 6)] <- c(3, 4, 5)     # ResFish (fleet 3) double-normal
+map_sel <- as.vector(map_sel)
+
+map_lf <- map
+map_lf$par_sel <- factor(map_sel)
+
+obj_lf <- MakeADFun(func = cmb(opal_model, data_lf),
+                    parameters = parameters,
+                    map        = map_lf)
+stopifnot(is.finite(obj_lf$fn()))
+
+## ---- Parameter bounds ----------------------------------------------------
+Lwr_lf <- rep(-Inf, length(obj_lf$par))
+Upr_lf <- rep( Inf, length(obj_lf$par))
+Lwr_lf[grep("log_B0",      names(obj_lf$par))] <- log(1)
+Upr_lf[grep("log_B0",      names(obj_lf$par))] <- log(exp(22))
+Lwr_lf[grep("log_cpue_q",  names(obj_lf$par))] <- log(0.001)
+Upr_lf[grep("log_cpue_q",  names(obj_lf$par))] <- log(10)
+Lwr_lf[grep("rdev_y",      names(obj_lf$par))] <- -5
+Upr_lf[grep("rdev_y",      names(obj_lf$par))] <-  5
+Lwr_lf[grep("init_rdev_a", names(obj_lf$par))] <- -5
+Upr_lf[grep("init_rdev_a", names(obj_lf$par))] <-  5
+Lwr_lf[grep("par_sel",     names(obj_lf$par))] <- -7
+Upr_lf[grep("par_sel",     names(obj_lf$par))] <-  7
+
+## ---- Fit: three-pass nlminb ----------------------------------------------
+control <- list(eval.max = 10000, iter.max = 10000)
+opt_lf <- nlminb(start = obj_lf$par, objective = obj_lf$fn,
+                 gradient = obj_lf$gr, lower = Lwr_lf, upper = Upr_lf,
+                 control = control)
+opt_lf <- nlminb(start = opt_lf$par, objective = obj_lf$fn,
+                 gradient = obj_lf$gr, lower = Lwr_lf, upper = Upr_lf,
+                 control = control)
+opt_lf <- nlminb(start = opt_lf$par, objective = obj_lf$fn,
+                 gradient = obj_lf$gr, lower = Lwr_lf, upper = Upr_lf,
+                 control = control)
+invisible(obj_lf$fn(opt_lf$par))   # set last.par to the MLE
+
+## ---- Convergence diagnostics ---------------------------------------------
+sdr_lf   <- RTMB::sdreport(obj_lf)
+paka_mgc <- max(abs(obj_lf$gr(opt_lf$par)))
+# Estimability is the convergence criterion (in place of opt_lf$convergence);
+# capture the full return so it is cached and re-printed verbatim in BLOCK C.
+estim    <- tryCatch(check_estimability(obj = obj_lf), error = function(e) e)
+
+## ---- Estimated spawning biomass + SS3 OM / EM ----------------------------
+rep_lf <- obj_lf$report()
+data(opaka_truth)
+
+## ---- Results bundle (everything the document consumes) -------------------
+paka <- list(
+  par     = opt_lf$par,
+  pdh     = isTRUE(sdr_lf$pdHess),
+  mgc     = paka_mgc,
+  mgc_sci = formatC(paka_mgc, format = "e", digits = 2),
+  estim   = estim,
+  ssb     = data.frame(
+    year     = calendar_years,
+    estimate = rep_lf$spawning_biomass_y[1:data$n_year],
+    model    = "opal (with LF)"
+  ),
+  om = subset(opaka_truth$om$sprseries, Yr %in% calendar_years,
+              select = c(Yr, SSB)),
+  em = subset(opaka_truth$em$sprseries, Yr %in% calendar_years,
+              select = c(Yr, SSB))
+)
+saveRDS(paka, paka_fit_path)
+
+}   # end cache-miss branch
+```
+
+
 
 \newpage
 
@@ -284,6 +518,9 @@ The second case study uses simulated data for Hawai'i 'opakapaka (*Pristipomoide
 
 The case study is configured to estimate population scale, annual recruitment deviations, initial age structure, and selectivity parameters for the fleets that have length composition data, with the remaining life-history and fishery parameters fixed at the values used to generate the simulated data. Because the operating model is built in SS3, the case study also serves as a cross-platform comparison: it provides a basis for evaluating the correspondence between the `opal` and SS3 population-dynamics calculations under identical inputs, and for comparing the spawning-biomass trajectory and parameter estimates from `opal` against the operating-model truth and the SS3 estimation model.
 
+Fitting the length composition likelihood and freeing selectivity for the commercial and survey fleets, the resulting estimated spawning-biomass trajectory is compared against the SS3 operating and estimation models in
+@fig-paka-lf-biomass. Model convergence is summarised by @tbl-paka-lf-convergence.
+
 # Discussion {#sec-discussion}
 
 `opal` provides an age-structured, length-based stock assessment framework implemented in RTMB, with a modular internal structure, support for multiple data types and likelihood forms, random-effects estimation, catch-based projections, Bayesian inference, and a set of built-in diagnostics. The two case studies demonstrate its application to both a real-data tuna assessment configured as an age-structured production model and a simulated single-species assessment that fits to index and length composition data and supports comparison against a known operating model.
@@ -315,7 +552,73 @@ Generative AI tools were used to assist with code development, refactoring, and 
 
 # Tables {#sec-tables}
 
+```{r}
+#| label: tbl-paka-lf-convergence
+#| tbl-cap: "opal (with LF) convergence diagnostics: positive-definite Hessian, maximum absolute gradient (mgc), minimum Hessian eigenvalue, and parameter estimability."
+#| echo: false
+
+est <- paka$estim
+
+if (inherits(est, "condition")) {
+  # check_estimability() failed and the condition was cached in Block B.
+  min_eig_chr  <- "\u2014"
+  estim_status <- paste0("check failed: ", conditionMessage(est))
+} else {
+  n_bad       <- length(est$WhichBad)
+  min_eig_chr <- formatC(min(est$Eigen$values), format = "e", digits = 2)
+  estim_status <- if (n_bad == 0) {
+    "0 (all parameters estimable)"
+  } else {
+    bad_names <- rownames(est$Hess)[est$WhichBad]
+    paste0(n_bad, " (", paste(bad_names, collapse = ", "), ")")
+  }
+}
+
+conv_tbl <- data.frame(
+  Diagnostic = c("Positive-definite Hessian",
+                 "Max |gradient| (mgc)",
+                 "Min Hessian eigenvalue",
+                 "Inestimable parameters"),
+  Value = c(as.character(paka$pdh),
+            paka$mgc_sci,
+            min_eig_chr,
+            estim_status),
+  check.names = FALSE
+)
+
+knitr::kable(conv_tbl, booktabs = TRUE, align = c("l", "l"))
+```
 
 \newpage
 
 # Figures {#sec-figures}
+
+
+```{r}
+#| echo: false
+#| label: fig-paka-lf-biomass
+#| fig-cap: "Estimated spawning-biomass trajectory for the 'opakapaka opal (with LF) model compared with the SS3 operating model (OM) and estimation model (EM), 1949--2023."
+#| fig-height: 4.5
+#| fig-width: 8
+
+ybmax_lf <- max(paka$ssb$estimate, paka$om$SSB, paka$em$SSB, na.rm = TRUE)
+
+ggplot() +
+  geom_line(data = paka$ssb,
+            aes(x = year, y = estimate, colour = "opal (with LF)"),
+            linewidth = 1) +
+  geom_line(data = paka$om,
+            aes(x = Yr, y = SSB, colour = "SS3 OM"), linewidth = 1) +
+  geom_line(data = paka$em,
+            aes(x = Yr, y = SSB, colour = "SS3 EM"), linewidth = 1) +
+  scale_colour_manual(values = c(
+    "opal (with LF)" = "cyan4",
+    "SS3 OM"         = "black",
+    "SS3 EM"         = "red"
+  )) +
+  labs(x = "Year", y = "Spawning biomass", colour = NULL) +
+  scale_y_continuous(limits = c(0, ybmax_lf * 1.2)) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
