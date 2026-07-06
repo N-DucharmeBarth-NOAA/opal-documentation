@@ -100,6 +100,8 @@ csl: apa.csl
 library(opal)    # pinned to commit 32239a3 via renv.lock
 library(RTMB)
 library(tidyverse)
+library(SparseNUTS)
+library(posterior)
 
 theme_set(theme_bw())
 ```
@@ -110,11 +112,9 @@ theme_set(theme_bw())
 #| results: hide
 
 ## ---- Cache location ------------------------------------------------------
-# Anchor to the document directory so the path resolves identically whether
-# Quarto's execution-dir is the file's directory (default) or the project root.
-# The qmd lives in assets/. Quarto's execution directory can vary, so check
-# the cache locations that occur when rendering from either the document
-# directory or the project root.
+# Anchor to the document's own directory when available. Quarto's execution
+# directory can vary, so check the cache locations that occur when rendering
+# from either the document directory or the project root.
 doc_dir <- tryCatch(
   dirname(knitr::current_input(dir = TRUE)),
   error = function(e) "."
@@ -317,6 +317,128 @@ estim    <- tryCatch(check_estimability(obj = obj_lf), error = function(e) e)
 rep_lf <- obj_lf$report()
 data(opaka_truth)
 
+## ---- Bayesian (MCMC) summaries -------------------------------------------
+# The dense-metric NUTS fit is pre-computed and distributed with the package.
+n_chains_mcmc <- 8L
+mcmc_fit <- readRDS(system.file("extdata", "opaka_mcmc_fit.rds", package = "opal"))
+
+post     <- SparseNUTS::extract_samples(mcmc_fit)
+n_post   <- nrow(post); n_per <- n_post / n_chains_mcmc
+chain_id <- rep(seq_len(n_chains_mcmc), each = n_per)
+iter_id  <- rep(seq_len(n_per),         times = n_chains_mcmc)
+mu_vec   <- obj_lf$env$last.par.best
+
+# Diagnostics table: scalar parameters + three evenly-spaced recruitment deviates
+rdev_cols  <- grep("rdev_y", colnames(post))
+show_rdev  <- colnames(post)[rdev_cols[round(seq(1, length(rdev_cols), length.out = 3))]]
+diag_cols  <- c("log_B0", "log_cpue_q[1]", "log_cpue_q[2]", show_rdev)
+ddf <- as.data.frame(post[, diag_cols, drop = FALSE])
+ddf$.chain <- chain_id; ddf$.iteration <- iter_id
+mcmc_diag <- posterior::summarise_draws(
+  posterior::as_draws_df(ddf),
+  posterior::default_summary_measures(),
+  posterior::default_convergence_measures())
+# Match the MLE to each (possibly indexed) posterior parameter name: mu_vec has
+# repeated names for vector parameters, so resolve "name[i]" positionally.
+mle_for <- function(v) {
+  if (grepl("\\[", v)) {
+    base <- sub("\\[.*", "", v)
+    idx  <- as.integer(sub(".*\\[(\\d+)\\].*", "\\1", v))
+    unname(mu_vec[names(mu_vec) == base][idx])
+  } else {
+    unname(mu_vec[v])
+  }
+}
+mcmc_diag$mle <- vapply(mcmc_diag$variable, mle_for, numeric(1))
+
+# Trace data for the scalar parameters
+scal       <- c("log_B0", "log_cpue_q[1]", "log_cpue_q[2]")
+lcq        <- mu_vec[names(mu_vec) == "log_cpue_q"]
+mcmc_trace <- do.call(rbind, lapply(scal, function(p)
+  data.frame(iter = iter_id, chain = factor(chain_id), param = p, value = post[, p])))
+mcmc_mle_ref <- data.frame(param = scal,
+                           mle = c(mu_vec[["log_B0"]], lcq[1], lcq[2]))
+
+## ---- Forward projections (MVN + MCMC), constant terminal catch -----------
+sdr_sum_lf  <- summary(sdr_lf, "report")
+sbio_rows   <- which(rownames(sdr_sum_lf) == "spawning_biomass_y")
+sbio_mle_sd <- sdr_sum_lf[sbio_rows, "Estimate"]
+sbio_se_sd  <- sdr_sum_lf[sbio_rows, "Std. Error"]
+B0_est      <- rep_lf$B0
+term_idx    <- data$n_year + 1L
+
+# Fields required by the projection helpers
+data_lf$first_yr         <- 1949L
+data_lf$last_yr          <- 2023L
+data_lf$removal_switch_f <- rep(0L, data_lf$n_fishery)
+
+n_proj <- 10L; n_iter <- 200L
+
+rdev_proj <- project_rec_devs(data = data_lf, obj = obj_lf,
+  first_yr = data_lf$first_yr, n_proj = n_proj, n_iter = n_iter)
+sel_proj  <- project_selectivity(data = data_lf, obj = obj_lf,
+  first_yr = data_lf$last_yr - 9, n_proj = n_proj, n_iter = n_iter)
+catch_ysf_proj <- array(0, dim = c(n_proj, data_lf$n_season, data_lf$n_fishery))
+for (y in seq_len(n_proj)) catch_ysf_proj[y, , ] <- data_lf$catch_obs_ysf[data_lf$n_year, , ]
+
+proj_mvn <- project_dynamics(data = data_lf, object = obj_lf, mcmc = NULL,
+  n_proj = n_proj, n_iter = n_iter, rdev_y = rdev_proj$rdev_y,
+  sel_fya = sel_proj, catch_ysf = catch_ysf_proj, return_hist = TRUE)
+
+rdev_proj_mcmc <- project_rec_devs(data = data_lf, obj = obj_lf, mcmc = mcmc_fit,
+  first_yr = data_lf$first_yr, n_proj = n_proj, n_iter = n_iter)
+proj_mcmc <- project_dynamics(data = data_lf, object = obj_lf, mcmc = mcmc_fit,
+  n_proj = n_proj, n_iter = n_iter, rdev_y = rdev_proj_mcmc$rdev_y,
+  sel_fya = sel_proj, catch_ysf = catch_ysf_proj, return_hist = TRUE)
+
+# Projected spawning biomass per iteration (proj_year 0 = terminal bridge state)
+spa <- rep_lf$spawning_potential_a
+sbio_iter <- function(proj_list, label) {
+  do.call(rbind, lapply(seq_along(proj_list), function(i) {
+    dyn <- proj_list[[i]]
+    sb  <- sapply(1:(n_proj + 1), function(y) sum(dyn$number_ysa[y, 1, ] * spa))
+    data.frame(iter = i, proj_year = 0:n_proj, sbio = sb, method = label)
+  }))
+}
+df_all <- rbind(sbio_iter(proj_mvn$dyn, "MVN"), sbio_iter(proj_mcmc$dyn, "MCMC"))
+
+# Historical window (last 60 yr) mapped to calendar years (t = n_year+1 -> 2024)
+n_hist_show <- 60L
+hist_idx    <- (term_idx - n_hist_show + 1):term_idx
+hist_years  <- 1948L + hist_idx
+
+df_hist_mvn <- data.frame(year = hist_years,
+  med  = sbio_mle_sd[hist_idx],
+  lo50 = sbio_mle_sd[hist_idx] - qnorm(0.75) * sbio_se_sd[hist_idx],
+  hi50 = sbio_mle_sd[hist_idx] + qnorm(0.75) * sbio_se_sd[hist_idx],
+  lo90 = sbio_mle_sd[hist_idx] - qnorm(0.95) * sbio_se_sd[hist_idx],
+  hi90 = sbio_mle_sd[hist_idx] + qnorm(0.95) * sbio_se_sd[hist_idx],
+  method = "MVN")
+hist_ribbon <- function(hist_sbio, label, idx, years) {
+  do.call(rbind, lapply(seq_along(idx), function(k) {
+    v <- hist_sbio[, idx[k]]
+    data.frame(year = years[k], med = median(v, na.rm = TRUE),
+      lo50 = quantile(v, .25, na.rm = TRUE), hi50 = quantile(v, .75, na.rm = TRUE),
+      lo90 = quantile(v, .05, na.rm = TRUE), hi90 = quantile(v, .95, na.rm = TRUE),
+      method = label)
+  }))
+}
+df_hist_mcmc     <- hist_ribbon(proj_mcmc$hist_sbio, "MCMC", hist_idx, hist_years)
+proj_hist_ribbon <- rbind(df_hist_mvn, df_hist_mcmc)
+
+proj_ribbon <- df_all |>
+  dplyr::filter(!is.na(sbio)) |>
+  dplyr::group_by(method, proj_year) |>
+  dplyr::summarise(med  = median(sbio),
+                   lo50 = quantile(sbio, .25), hi50 = quantile(sbio, .75),
+                   lo90 = quantile(sbio, .05), hi90 = quantile(sbio, .95),
+                   .groups = "drop") |>
+  dplyr::mutate(year = 2024L + proj_year)
+
+proj_hist_mle <- data.frame(year = hist_years, sbio = sbio_mle_sd[hist_idx])
+proj_om <- subset(opaka_truth$om$sprseries, Yr %in% hist_years, select = c(Yr, SSB))
+proj_em <- subset(opaka_truth$em$sprseries, Yr %in% hist_years, select = c(Yr, SSB))
+
 ## ---- Results bundle (everything the document consumes) -------------------
 paka <- list(
   par     = opt_lf$par,
@@ -334,6 +456,21 @@ paka <- list(
   em = subset(opaka_truth$em$sprseries, Yr %in% calendar_years,
               select = c(Yr, SSB))
 )
+
+## ---- Bayesian + projection outputs appended to the bundle ----------------
+paka$mcmc_diag        <- mcmc_diag
+paka$mcmc_trace       <- mcmc_trace
+paka$mcmc_mle_ref     <- mcmc_mle_ref
+paka$n_chains_mcmc    <- n_chains_mcmc
+paka$proj_hist_ribbon <- proj_hist_ribbon
+paka$proj_ribbon      <- proj_ribbon
+paka$proj_hist_mle    <- proj_hist_mle
+paka$proj_om          <- proj_om
+paka$proj_em          <- proj_em
+paka$n_proj           <- n_proj
+paka$n_iter           <- n_iter
+paka$n_hist_show      <- n_hist_show
+
 saveRDS(paka, paka_fit_path)
 
 }   # end cache-miss branch
@@ -547,13 +684,15 @@ with the lognormal recruitment bias adjustment applied in the recruitment equati
 
 # Features {#sec-features}
 
-### Projections {#sec-projections}
-
-`opal` supports catch-based forward projection of the population from an estimated set of parameters. Projections are conditioned on a specified future catch and propagate parameter uncertainty into the projected quantities. Two approaches to characterizing uncertainty in the projections are available: resampling from a multivariate normal approximation to the joint parameter distribution at the mode, and propagation of a posterior sample obtained by Markov chain Monte Carlo (MCMC; @sec-bayesian-inference). Both approaches yield distributions of projected spawning biomass and depletion under the specified catch scenario.
-
 ### Bayesian inference {#sec-bayesian-inference}
 
-Prior information can be incorporated either through a penalized maximum likelihood estimation (MLE) approach, in which priors enter the objective function as penalty terms and the model is optimized with `nlminb`, or through direct Bayesian inference. Bayesian estimation is performed with `SparseNUTS` [@monnahan_sparsenuts_2026], which implements a sparse-preconditioned variant of the No-U-Turn Sampler that exploits the sparse precision structure of TMB models to improve sampling efficiency for high-dimensional, correlated, and hierarchically structured posteriors [@monnahan_leveraging_2026]. Because the `opal` objective function and its component modules are constructed in RTMB, the same model definition is used for both the MLE and the Bayesian workflows.
+Prior information can be incorporated either through a penalized maximum likelihood estimation (MLE) approach, in which priors enter the objective function as penalty terms and the model is optimized with `nlminb`, or through direct Bayesian inference. Bayesian estimation is performed with `SparseNUTS` [@monnahan_sparsenuts_2026], which implements a sparse-preconditioned variant of the No-U-Turn Sampler that exploits the sparse precision structure of TMB models to improve sampling efficiency for high-dimensional, correlated, and hierarchically structured posteriors [@monnahan_leveraging_2026]. Because the `opal` objective function and its component modules are constructed in RTMB, the same model definition is used for both the MLE and the Bayesian workflows. Convergence is assessed with the usual Markov chain Monte Carlo (MCMC) diagnostics --- split-$\hat{R}$ and bulk and tail effective sample sizes --- and the resulting posterior draws are carried directly into the forward projections described below. For the 'opakapaka case study (@sec-case-paka), a dense-metric sampler run for eight chains mixed well across the full parameter vector (@tbl-paka-mcmc-diag, @fig-paka-mcmc-trace).
+
+### Projections {#sec-projections}
+
+`opal` supports catch-based forward projection of the population from an estimated set of parameters. A projection is specified by a number of projection years, a future catch scenario, and a number of uncertainty iterations, and is run with `project_dynamics()` together with the helper functions `project_rec_devs()` and `project_selectivity()`. Future recruitment deviations are simulated from an ARIMA model fitted to the estimated recruitment-deviation series (or, under the Bayesian workflow, to each posterior draw's own deviation history), and future selectivity is resampled from the most recent estimated years, so that both process components carry forward the variability seen in the historical period.
+
+Projections are conditioned on the specified future catch and propagate parameter uncertainty into the projected quantities. Two approaches to characterizing that uncertainty are available: resampling from a multivariate normal (MVN) approximation to the joint parameter distribution at the mode, and propagation of a posterior sample obtained by MCMC (@sec-bayesian-inference). Under the MVN approach the scalar parameters are drawn from the Hessian-based covariance while the recruitment and initial-age deviations are set to their conditional expectation given those draws; this preserves the estimated correlation between population scale and the deviations and avoids a Jensen-inequality inflation of mean biomass, so that the uncertainty in the terminal (projection-start) state coincides with the delta-method uncertainty of the historical trajectory. Both approaches yield distributions of projected spawning biomass and depletion under the specified catch scenario (@fig-paka-projection).
 
 ### Model diagnostics {#sec-model-diagnostics}
 
@@ -581,6 +720,8 @@ The case study is configured to estimate population scale, annual recruitment de
 
 Fitting the length composition likelihood and freeing selectivity for the commercial and survey fleets, the resulting estimated spawning-biomass trajectory is compared against the SS3 operating and estimation models in
 @fig-paka-lf-biomass. Model convergence is summarised by @tbl-paka-lf-convergence.
+
+The same model was also fitted with the Bayesian workflow (@sec-bayesian-inference): a dense-metric NUTS sampler was run for eight chains, which were well mixed with split-$\hat{R}$ close to one and large effective sample sizes for the scalar parameters and recruitment deviations (@tbl-paka-mcmc-diag, @fig-paka-mcmc-trace). The stock was then projected ten years forward under a constant catch held at the terminal year's level, propagating parameter uncertainty through both the MVN and MCMC approaches (@sec-projections). The two approaches agree closely at the projection-start state, and the projection intervals widen only gradually because 'opakapaka is long-lived and matures slowly, so the existing adult biomass declines nearly deterministically under constant catch while future recruitment and selectivity uncertainty accumulate over the projection horizon (@fig-paka-projection).
 
 # Discussion {#sec-discussion}
 
@@ -741,6 +882,21 @@ conv_tbl <- data.frame(
 )
 
 knitr::kable(conv_tbl, booktabs = TRUE, align = c("l", "l"))
+```
+
+```{r}
+#| label: tbl-paka-mcmc-diag
+#| tbl-cap: "Posterior summaries and MCMC convergence diagnostics for the 'opakapaka opal (with LF) model: the MLE estimate, posterior mean and standard deviation, 5th and 95th percentiles, bulk and tail effective sample sizes (ESS), and split-Rhat, for the scalar parameters (unfished spawning biomass and the two CPUE catchabilities) and three representative recruitment deviations."
+#| echo: false
+
+mdiag <- paka$mcmc_diag
+knitr::kable(
+  mdiag[, c("variable", "mle", "mean", "sd", "q5", "q95",
+            "ess_bulk", "ess_tail", "rhat")],
+  col.names = c("Parameter", "MLE", "Mean", "SD", "q5", "q95",
+                "ESS bulk", "ESS tail", "Rhat"),
+  digits = 3, booktabs = TRUE, align = c("l", rep("r", 8))
+)
 ```
 
 \newpage
@@ -1153,6 +1309,59 @@ ggplot() +
   )) +
   labs(x = "Year", y = "Spawning biomass", colour = NULL) +
   scale_y_continuous(limits = c(0, ybmax_lf * 1.2)) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| echo: false
+#| label: fig-paka-mcmc-trace
+#| fig-cap: "MCMC traces for the scalar parameters of the 'opakapaka opal (with LF) model --- unfished spawning biomass and the two CPUE catchabilities, on the log scale --- across eight chains (colours). Red dashed lines mark the MLE. Overlapping, stationary chains indicate good mixing."
+#| fig-height: 5
+#| fig-width: 8
+
+ggplot(paka$mcmc_trace, aes(iter, value, colour = chain)) +
+  geom_line(linewidth = 0.3, alpha = 0.7) +
+  geom_hline(data = paka$mcmc_mle_ref, aes(yintercept = mle),
+             linetype = "dashed", colour = "red", linewidth = 0.5) +
+  facet_wrap(~ param, scales = "free_y", ncol = 1) +
+  labs(x = "Post-warmup iteration", y = "Value", colour = "Chain") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| echo: false
+#| label: fig-paka-projection
+#| fig-cap: "'Opakapaka spawning biomass: historical uncertainty and a 10-year constant-catch projection (200 draws per method); the last 60 years are shown. Grey solid = estimated MLE; black dashed = SS3 operating model; red = SS3 estimation model. Coloured ribbons give the 50% (darker) and 90% (lighter) intervals for the MVN and MCMC approaches, and the orange line is the MCMC historical median. The vertical dashed line marks the end of the historical period (2024)."
+#| fig-height: 4.5
+#| fig-width: 8
+
+pal_proj <- c(MVN = "steelblue", MCMC = "darkorange")
+
+ggplot() +
+  geom_ribbon(data = paka$proj_hist_ribbon,
+              aes(year, ymin = lo90, ymax = hi90, fill = method), alpha = 0.12) +
+  geom_ribbon(data = paka$proj_hist_ribbon,
+              aes(year, ymin = lo50, ymax = hi50, fill = method), alpha = 0.25) +
+  geom_line(data = subset(paka$proj_hist_ribbon, method == "MCMC"),
+            aes(year, med, colour = method), linewidth = 0.75) +
+  geom_line(data = paka$proj_hist_mle, aes(year, sbio),
+            colour = "grey20", linewidth = 0.9) +
+  geom_line(data = paka$proj_om, aes(Yr, SSB),
+            colour = "black", linewidth = 0.8, linetype = "dashed") +
+  geom_line(data = paka$proj_em, aes(Yr, SSB),
+            colour = "red", linewidth = 0.8) +
+  geom_vline(xintercept = 2024, linetype = "dashed", colour = "grey50") +
+  geom_ribbon(data = paka$proj_ribbon,
+              aes(year, ymin = lo90, ymax = hi90, fill = method), alpha = 0.15) +
+  geom_ribbon(data = paka$proj_ribbon,
+              aes(year, ymin = lo50, ymax = hi50, fill = method), alpha = 0.30) +
+  geom_line(data = paka$proj_ribbon, aes(year, med, colour = method),
+            linewidth = 1) +
+  scale_fill_manual(values = pal_proj) +
+  scale_colour_manual(values = pal_proj) +
+  labs(x = "Year", y = "Spawning biomass", colour = "Method", fill = "Method") +
   theme_minimal() +
   theme(legend.position = "bottom")
 ```
