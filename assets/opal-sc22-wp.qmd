@@ -696,7 +696,7 @@ Projections are conditioned on the specified future catch and propagate paramete
 
 ### Model diagnostics {#sec-model-diagnostics}
 
-`opal` provides a set of built-in diagnostics intended to support model evaluation and validation. These include estimability checks and parameter-correlation summaries derived from the fitted model; simulation self-testing, in which data are simulated from the model and re-estimated to confirm that parameters can be recovered; posterior-predictive checking where the observations are compared to the simulated distributions of the predictions given the model and one-step-ahead (OSA) residuals, computed through RTMB's `oneStepPredict()`, which provide residuals that are independent and identically distributed under a correctly specified model and are therefore more readily interpretable than ordinary residuals for non-Gaussian observations [@kristensen_tmb_2016]. The simulation and posterior-predictive capabilities also support the projection and Bayesian workflows described above.
+`opal` provides a set of built-in diagnostics intended to support model evaluation and validation. These include estimability checks and parameter-correlation summaries derived from the fitted model; simulation self-testing, in which data are simulated from the model and re-estimated to confirm that parameters can be recovered; posterior-predictive checking where the observations are compared to the simulated distributions of the predictions given the model and one-step-ahead (OSA) residuals, computed through RTMB's `oneStepPredict()`, which provide residuals that are independent and identically distributed under a correctly specified model and are therefore more readily interpretable than ordinary residuals for non-Gaussian observations [@dunn_randomized_1996; @thygesen_validation_2017; @kristensen_tmb_2016]. The simulation and posterior-predictive capabilities also support the projection and Bayesian workflows described above.
 
 # Case studies {#sec-case-studies}
 
@@ -710,7 +710,7 @@ The current diagnostic configuration uses the quarterly standardized CPUE series
 
 The fit converged according to `nlminb`, with the constrained KKT-style gradient close to zero despite a larger raw maximum gradient caused by active bounds (@tbl-bet-fit-summary). The likelihood decomposition shows that the length-composition data dominate the objective in this configuration, while the CPUE component contributes the abundance trend information and the recruitment-deviation density regularizes annual departures from the stock-recruitment curve. The estimated unfished spawning biomass is approximately `r format(round(bet$report$B0), big.mark = ",")` mt, and the final-year relative spawning biomass is `r round(bet_final_sb_b0, 3)` when scaled by $B_0$ (@tbl-bet-depletion). The dynamic depletion ratio is slightly higher (`r round(bet_final_dyn_dep, 3)`) because it uses the time-varying unfished spawning biomass denominator rather than the static $B_0$ denominator.
 
-Diagnostic plots in the `opal` BET vignette compare observed and predicted CPUE by seasonal index, observed and predicted length and weight compositions, fitted recruitment deviations, and estimated selectivity-at-length and selectivity-at-age curves. The CPUE fit in @fig-bet-cpue-fit tracks the broad decline in standardized abundance from the early 1950s through the low-abundance period in the 2000s, while allowing the four quarterly indices to retain their own scale and observation uncertainty. Simulated CPUE series from the fitted model are shown on the log scale in @fig-bet-cpue-sim. The CPUE OSA residuals in @fig-bet-osa-residuals are centred close to zero and fall within approximately $\pm 2$ residual units, with SDNRs below one for each index month (@tbl-bet-cpue-sdnr). The mean length- and weight-composition diagnostics in @fig-bet-lf-diagnostics and @fig-bet-wf-diagnostics include fitted predictions and simulated replicate lines for the active composition fisheries. The LF and WF composition residual diagnostics in @fig-bet-lf-composition-residuals, @fig-bet-wf-composition-residuals, and @fig-bet-composition-residual-qq use `compResidual::resMulti()` row-by-row for the active multinomial composition likelihoods and are summarised in @tbl-bet-composition-sdnr. The biomass and depletion trajectories in @fig-bet-biomass show the long-term decline in spawning biomass relative to unfished conditions and the partial separation between $SB/B_0$ and dynamic depletion. As with the 'opakapaka example, these results are intended to demonstrate the end-to-end workflow rather than to replace a full production assessment model.
+Diagnostic plots in the `opal` BET vignette compare observed and predicted CPUE by seasonal index, observed and predicted length and weight compositions, fitted recruitment deviations, and estimated selectivity-at-length and selectivity-at-age curves. The CPUE fit in @fig-bet-cpue-fit tracks the broad decline in standardized abundance from the early 1950s through the low-abundance period in the 2000s, while allowing the four quarterly indices to retain their own scale and observation uncertainty; simulated CPUE series from the fitted model show the amount of variation expected under the fitted lognormal observation model. The CPUE OSA residuals in @fig-bet-osa-residuals are centred close to zero and fall within approximately $\pm 2$ residual units, with SDNRs below one for each index month (@tbl-bet-cpue-sdnr). These residuals use the randomized quantile-residual logic underlying OSA diagnostics for latent-variable models, so approximate standard-normal behaviour is expected when the observation model is adequate [@dunn_randomized_1996; @thygesen_validation_2017]. The mean length- and weight-composition diagnostics in @fig-bet-lf-diagnostics and @fig-bet-wf-diagnostics include fitted predictions and simulated replicate lines for the active composition fisheries. The LF and WF composition residual diagnostics in @fig-bet-lf-composition-residuals, @fig-bet-wf-composition-residuals, and @fig-bet-composition-residual-qq use `compResidual::resMulti()` row-by-row for the active multinomial composition likelihoods and are summarised in @tbl-bet-composition-sdnr. The biomass and depletion trajectories in @fig-bet-biomass show the long-term decline in spawning biomass relative to unfished conditions and the partial separation between $SB/B_0$ and dynamic depletion. As with the 'opakapaka example, these results are intended to demonstrate the end-to-end workflow rather than to replace a full production assessment model.
 
 ## Hawai'i 'Opakapaka {#sec-case-paka}
 
@@ -907,7 +907,7 @@ knitr::kable(
 ```{r}
 #| echo: false
 #| label: fig-bet-cpue-fit
-#| fig-cap: "Observed and predicted standardized CPUE for the fitted WCPO bigeye tuna diagnostic model, shown by index month. Vertical ranges show one fitted standard deviation on the log scale."
+#| fig-cap: "Observed, predicted, and simulated standardized CPUE for the fitted WCPO bigeye tuna diagnostic model, shown by index month. Vertical ranges show one fitted standard deviation on the log scale; grey lines show fitted-model simulations."
 #| fig-height: 4.5
 #| fig-width: 8
 
@@ -922,7 +922,18 @@ bet_cpue <- bet$data$cpue_data %>%
     upper = exp(log(value) + sigma)
   )
 
+bet_cpue_sim <- bet$report$cpue_sim %>%
+  mutate(
+    index = factor(month,
+                   levels = sort(unique(month)),
+                   labels = month.name[sort(unique(month))]),
+    simulated = exp(simulated_log)
+  )
+
 ggplot(bet_cpue, aes(x = year)) +
+  geom_line(data = bet_cpue_sim,
+            aes(y = simulated, group = sim_id),
+            colour = "grey70", alpha = 0.5, linewidth = 0.3) +
   geom_linerange(aes(ymin = lower, ymax = upper), colour = "grey60",
                  alpha = 0.65) +
   geom_point(aes(y = value), size = 1.1, colour = "black") +
@@ -930,42 +941,6 @@ ggplot(bet_cpue, aes(x = year)) +
   facet_wrap(~ index, scales = "free_y", ncol = 2) +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
   labs(x = "Year", y = "Standardized CPUE") +
-  theme_minimal()
-```
-
-```{r}
-#| echo: false
-#| label: fig-bet-cpue-sim
-#| fig-cap: "Observed, predicted, and simulated log-CPUE for the fitted WCPO bigeye tuna diagnostic model, shown by index month."
-#| fig-height: 5
-#| fig-width: 8
-
-bet_cpue_log <- bet$data$cpue_data %>%
-  mutate(
-    obs_id = row_number(),
-    observed = log(value),
-    predicted = log(bet$report$cpue_pred),
-    index = factor(month,
-                   levels = sort(unique(month)),
-                   labels = paste0("Month: ", sort(unique(month))))
-  )
-
-bet_cpue_sim <- bet$report$cpue_sim %>%
-  mutate(
-    index = factor(month,
-                   levels = sort(unique(month)),
-                   labels = paste0("Month: ", sort(unique(month))))
-  )
-
-ggplot(bet_cpue_log, aes(x = year)) +
-  geom_line(data = bet_cpue_sim,
-            aes(y = simulated_log, group = sim_id),
-            colour = "grey70", alpha = 0.55, linewidth = 0.35) +
-  geom_point(aes(y = observed), colour = "black", size = 1) +
-  geom_line(aes(y = predicted), colour = "red3", linewidth = 0.8) +
-  facet_wrap(~ index, ncol = 2, scales = "free_y") +
-  labs(x = "Year", y = "log(CPUE)",
-       subtitle = paste0(max(bet_cpue_sim$sim_id), " fitted-model simulations in grey")) +
   theme_minimal()
 ```
 
@@ -1198,7 +1173,7 @@ plot_bet_comp_residuals <- function(plot_data, y_label) {
   ) +
     geom_point(shape = 21, alpha = 0.45, colour = "grey25", stroke = 0.08) +
     facet_wrap(~ Fishery, ncol = 2, scales = "free_y") +
-    scale_fill_manual(values = c("Positive" = "white", "Negative" = "black")) +
+    scale_fill_manual(values = c("Positive" = "#d73027", "Negative" = "#4575b4")) +
     scale_size_continuous(range = c(0.2, 3.2), name = "|Residual|") +
     labs(x = "Year", y = y_label, fill = "Residual sign") +
     theme_minimal() +
@@ -1209,7 +1184,7 @@ plot_bet_comp_residuals <- function(plot_data, y_label) {
 ```{r}
 #| echo: false
 #| label: fig-bet-lf-composition-residuals
-#| fig-cap: "Length-composition OSA residual diagnostics for the fitted WCPO bigeye tuna diagnostic model. Point size is proportional to absolute residual magnitude; white and black points indicate positive and negative residuals, respectively."
+#| fig-cap: "Length-composition OSA residual diagnostics for the fitted WCPO bigeye tuna diagnostic model. Point size is proportional to absolute residual magnitude; red and blue points indicate positive and negative residuals, respectively."
 #| fig-height: 8.5
 #| fig-width: 8
 
@@ -1222,7 +1197,7 @@ plot_bet_comp_residuals(
 ```{r}
 #| echo: false
 #| label: fig-bet-wf-composition-residuals
-#| fig-cap: "Weight-composition OSA residual diagnostics for the fitted WCPO bigeye tuna diagnostic model. Point size is proportional to absolute residual magnitude; white and black points indicate positive and negative residuals, respectively."
+#| fig-cap: "Weight-composition OSA residual diagnostics for the fitted WCPO bigeye tuna diagnostic model. Point size is proportional to absolute residual magnitude; red and blue points indicate positive and negative residuals, respectively."
 #| fig-height: 8.5
 #| fig-width: 8
 
