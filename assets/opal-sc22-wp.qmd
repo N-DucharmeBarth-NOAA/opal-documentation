@@ -863,7 +863,7 @@ The current diagnostic configuration uses the quarterly standardized CPUE series
 
 The fit converged according to `nlminb`, with the constrained KKT-style gradient close to zero despite a larger raw maximum gradient caused by active bounds (@tbl-bet-fit-summary). Fitting this diagnostic configuration from the configured starting values to the maximum-likelihood estimate took `r bet_mle_runtime_text` on the workstation used to build this document, requiring `r bet_mle_iterations` optimizer iterations, `r bet_mle_function_evals` function evaluations, and `r bet_mle_gradient_evals` gradient evaluations. The additive objective decomposition is dominated numerically by the composition likelihoods, especially the weight-composition component, while the CPUE component contributes the abundance trend information and the recruitment-deviation density regularizes annual departures from the stock-recruitment curve. The estimated unfished spawning biomass is approximately `r format(round(bet$report$B0), big.mark = ",")` mt, and the final-year relative spawning biomass is `r round(bet_final_sb_b0, 3)` when scaled by $SB_0$ (@tbl-bet-depletion). The dynamic depletion ratio is slightly higher (`r round(bet_final_dyn_dep, 3)`) because it uses the time-varying unfished spawning biomass denominator rather than the static $SB_0$ denominator.
 
-Diagnostic plots in the `opal` BET vignette compare observed and predicted CPUE by seasonal index, observed and predicted length and weight compositions, fitted recruitment deviations, and estimated selectivity-at-length and selectivity-at-age curves. The CPUE fit in @fig-bet-cpue-fit tracks the broad decline in standardized abundance from the early 1950s through the low-abundance period in the 2000s, while allowing the four quarterly indices to retain their own scale and observation uncertainty; simulated CPUE series from the fitted model show the amount of variation expected under the fitted lognormal observation model. The CPUE OSA residuals in @fig-bet-osa-residuals are centred close to zero and fall within approximately $\pm 2$ residual units, with SDNRs below one for each index month (@tbl-bet-cpue-sdnr). These residuals use the randomized quantile-residual logic underlying OSA diagnostics for latent-variable models, so approximate standard-normal behaviour is expected when the observation model is adequate [@dunn_randomized_1996; @thygesen_validation_2017]. The mean length- and weight-composition diagnostics in @fig-bet-lf-diagnostics and @fig-bet-wf-diagnostics aggregate observations, predictions, and simulations over all years for each active composition fishery; the simulated lines are generated on the same mean-composition scale as the red fitted line, so their average is centred on the fitted composition. To show the unaggregated temporal structure, @fig-bet-lf12-year-composition and @fig-bet-wf15-year-composition give year-specific examples for length-composition fishery 12 and weight-composition fishery 15. Example LF and WF composition OSA residual diagnostics are shown for fishery 12 and fishery 15 in @fig-bet-lf-composition-residuals and @fig-bet-wf-composition-residuals; these two panels are examples rather than the full residual set. The by-fishery Q-Q diagnostics in @fig-bet-composition-residual-qq summarise all active composition residuals. Following the SBT diagnostic summaries, @tbl-bet-composition-sdnr separates the bin-level OSA residual SDNR from the Francis mean-composition SDNR and McAllister-Ianelli effective-sample-size diagnostics. The OSA residuals are generated with `r bet_comp_residual_source` for the active multinomial composition likelihoods, and the near-one bin-level SDNRs are conditional on the variance-adjusted input sample sizes used in the likelihood; the mean input $N$ by fishery ranges from `r signif(bet_comp_mean_input_n_range[1], 3)` to `r signif(bet_comp_mean_input_n_range[2], 3)` after downweighting.
+Diagnostic plots in the `opal` BET vignette compare observed and predicted CPUE by seasonal index, observed and predicted length and weight compositions, fitted recruitment deviations, and estimated selectivity-at-length and selectivity-at-age curves. The CPUE fit in @fig-bet-cpue-fit tracks the broad decline in standardized abundance from the early 1950s through the low-abundance period in the 2000s, while allowing the four quarterly indices to retain their own scale and observation uncertainty; simulated CPUE series from the fitted model show the amount of variation expected under the fitted lognormal observation model. The CPUE OSA residuals in @fig-bet-osa-residuals are centred close to zero and fall within approximately $\pm 2$ residual units, with SDNRs below one for each index month (@tbl-bet-cpue-sdnr). These residuals use the randomized quantile-residual logic underlying OSA diagnostics for latent-variable models, so approximate standard-normal behaviour is expected when the observation model is adequate [@dunn_randomized_1996; @thygesen_validation_2017]. The mean length- and weight-composition diagnostics in @fig-bet-lf-diagnostics and @fig-bet-wf-diagnostics aggregate observations, predictions, and simulations over all years for each active composition fishery; the simulated lines are generated on the same mean-composition scale as the red fitted line, so their average is centred on the fitted composition. To show the unaggregated temporal structure, @fig-bet-lf12-year-composition and @fig-bet-wf15-year-composition give year-specific examples for length-composition fishery 12 and weight-composition fishery 15. Example LF and WF composition OSA residual diagnostics are shown for fishery 12 and fishery 15 in @fig-bet-lf-composition-residuals and @fig-bet-wf-composition-residuals; these two panels are examples rather than the full residual set. The by-fishery Q-Q diagnostics in @fig-bet-composition-residual-qq summarise all active composition residuals against a fixed standard-normal reference line, rather than a fitted Q-Q line, so below-one dispersion remains visible. Following the SBT diagnostic summaries, @tbl-bet-composition-sdnr separates the bin-level OSA residual SDNR from the Francis mean-composition SDNR and McAllister-Ianelli effective-sample-size diagnostics. The OSA residuals are generated with `r bet_comp_residual_source` for the active multinomial composition likelihoods, and the near-one bin-level SDNRs are conditional on the variance-adjusted input sample sizes used in the likelihood; the mean input $N$ by fishery ranges from `r signif(bet_comp_mean_input_n_range[1], 3)` to `r signif(bet_comp_mean_input_n_range[2], 3)` after downweighting. The close Q-Q alignment is therefore a check of the randomized bin-level residual distribution for the weighted pseudo-data likelihood, not evidence that the raw composition data are perfectly fitted.
 
 The selectivity diagnostics in @tbl-bet-selectivity-issues and @fig-bet-selectivity-length show where the fitted `opal` selectivity curves differ from the SS3 reference curves and where estimated terms are constrained by bounds. Most flagged issues are bound-related rather than unconstrained interior failures, which is consistent with the small KKT-style gradient in @tbl-bet-fit-summary despite the larger raw maximum gradient. The recruitment deviations in @fig-bet-recruitment-deviations show the seasonal pattern of estimated process variation. The biomass and depletion trajectories in @fig-bet-biomass show the long-term decline in spawning biomass relative to unfished conditions and the partial separation between $SB/SB_0$ and dynamic depletion. As with the 'opakapaka example, these results are intended to demonstrate the end-to-end workflow rather than to replace a full production assessment model.
 
@@ -1616,24 +1616,35 @@ plot_bet_comp_residuals(
 ```{r}
 #| echo: false
 #| label: fig-bet-composition-residual-qq
-#| fig-cap: "Normal Q-Q diagnostics for length- and weight-composition OSA residuals in the fitted WCPO bigeye tuna diagnostic model, shown separately by composition type and fishery."
+#| fig-cap: "Normal Q-Q diagnostics for length- and weight-composition OSA residuals in the fitted WCPO bigeye tuna diagnostic model, shown separately by composition type and fishery. The red line is the fixed standard-normal one-to-one reference; it is not fitted separately within panels."
 #| fig-height: 8
 #| fig-width: 8
 
 bet_comp_qq <- bet_comp_residuals %>%
   mutate(
     fishery_number = as.integer(sub("Fishery ", "", as.character(Fishery))),
-    panel = paste(type, Fishery, sep = "\n")
+    sdnr = ave(residual, type, Fishery, FUN = sd),
+    panel = sprintf("%s\n%s\nSDNR = %.2f", type, Fishery, sdnr)
   ) %>%
+  group_by(type, Fishery) %>%
+  arrange(residual, .by_group = TRUE) %>%
+  mutate(theoretical = qnorm(ppoints(n()))) %>%
+  ungroup() %>%
   arrange(type, fishery_number) %>%
   mutate(panel = factor(panel, levels = unique(panel)))
 
-ggplot(bet_comp_qq, aes(sample = residual)) +
-  stat_qq(size = 0.45, alpha = 0.45) +
-  stat_qq_line(colour = "red3", linetype = "dashed") +
-  facet_wrap(~ panel, ncol = 4, scales = "free") +
+bet_comp_qq_limit <- max(abs(c(bet_comp_qq$theoretical, bet_comp_qq$residual)), na.rm = TRUE)
+bet_comp_qq_limit <- ceiling(min(max(bet_comp_qq_limit, 4), 5.5) * 2) / 2
+
+ggplot(bet_comp_qq, aes(x = theoretical, y = residual)) +
+  geom_abline(intercept = 0, slope = 1, colour = "red3", linetype = "dashed", linewidth = 0.35) +
+  geom_point(size = 0.28, alpha = 0.25) +
+  facet_wrap(~ panel, ncol = 4) +
+  coord_equal(xlim = c(-bet_comp_qq_limit, bet_comp_qq_limit),
+              ylim = c(-bet_comp_qq_limit, bet_comp_qq_limit)) +
   labs(x = "Theoretical quantiles", y = "Sample quantiles") +
-  theme_minimal()
+  theme_minimal() +
+  theme(strip.text = element_text(size = 6.5))
 ```
 
 ```{r}
