@@ -104,7 +104,69 @@ library(tidyverse)
 library(SparseNUTS)
 library(posterior)
 
-theme_set(theme_bw())
+```
+
+```{r}
+#| label: setup-palette
+#| include: false
+
+## opal palette -------------------------------------------------------------
+## Colours sampled from the opal logo.
+opal_cols <- c(
+  navy  = "#013282", ocean = "#064E8F", midblue = "#066AA7", blue  = "#0181C3",
+  teal  = "#27A7BE", aqua  = "#7DD2DB", gold    = "#FCCF43", coral = "#D92208",
+  truth = "#4D4D4D", obs   = "#B3B3B3", struct  = "#8C8C8C"
+)
+
+## model dimension: every label variant used in the paper -> a fixed colour
+opal_models <- c(
+  "opal"           = unname(opal_cols["teal"]),
+  "opal (with LF)" = unname(opal_cols["teal"]),
+  "opal estimate"  = unname(opal_cols["teal"]),
+  "SS3"            = unname(opal_cols["navy"]),
+  "SS3 EM"         = unname(opal_cols["navy"]),
+  "SS3 reference"  = unname(opal_cols["navy"]),
+  "SS3 OM"         = unname(opal_cols["truth"]),
+  "MFCL"           = unname(opal_cols["coral"])
+)
+
+## name-keyed, so a model keeps its colour regardless of which others are present.
+## `breaks` (set per figure) controls legend order/inclusion.
+scale_colour_opal <- function(...) ggplot2::scale_colour_manual(values = opal_models, ...)
+scale_fill_opal   <- function(...) ggplot2::scale_fill_manual(values = opal_models, ...)
+
+## data / observation roles
+opal_role <- c(
+  observed  = unname(opal_cols["obs"]),
+  fitted    = unname(opal_cols["teal"]),
+  simulated = unname(opal_cols["aqua"])
+)
+
+## diverging residual scale
+scale_fill_opal_resid <- function(name = "Mean OSA residual", limits = c(-4, 4), ...) {
+  ggplot2::scale_fill_gradient2(
+    low = unname(opal_cols["ocean"]), mid = "#F7F7F7", high = unname(opal_cols["coral"]),
+    midpoint = 0, limits = limits, oob = scales::squish, name = name, ...
+  )
+}
+
+## projection-method sub-palette (NOT the model dimension)
+opal_proj <- c(MVN = unname(opal_cols["blue"]), MCMC = "#E0A82E")
+
+## MCMC chain identity is nominal -> qualitative CVD-safe set (Okabe-Ito)
+opal_chains <- c("#000000", "#E69F00", "#56B4E9", "#009E73",
+                 "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+## shared theme (replaces the per-figure theme_minimal() calls)
+theme_opal <- function(base_size = 11, base_family = "") {
+  ggplot2::theme_minimal(base_size = base_size, base_family = base_family) +
+    ggplot2::theme(
+      legend.position  = "bottom",
+      panel.grid.minor = ggplot2::element_blank(),
+      strip.background = ggplot2::element_blank()
+    )
+}
+theme_set(theme_opal())
 ```
 
 ```{r}
@@ -1167,7 +1229,7 @@ knitr::kable(
 ```{r}
 #| echo: false
 #| label: fig-paka-lf-biomass
-#| fig-cap: "Estimated spawning-biomass trajectory for the 'opakapaka opal (with LF) model compared with the SS3 operating model (OM) and estimation model (EM), 1949--2023."
+#| fig-cap: "Estimated spawning-biomass trajectory for the 'opakapaka `opal` model compared with the SS3 operating model (OM) and estimation model (EM), 1949--2023."
 #| fig-height: 4.5
 #| fig-width: 8
 
@@ -1175,48 +1237,42 @@ ybmax_lf <- max(paka$ssb$estimate, paka$om$SSB, paka$em$SSB, na.rm = TRUE)
 
 ggplot() +
   geom_line(data = paka$ssb,
-            aes(x = year, y = estimate, colour = "opal (with LF)"),
+            aes(x = year, y = estimate, colour = "opal"),
             linewidth = 1) +
   geom_line(data = paka$om,
-            aes(x = Yr, y = SSB, colour = "SS3 OM"), linewidth = 1) +
+            aes(x = Yr, y = SSB, colour = "SS3 OM"),
+            linewidth = 1, linetype = "dashed") +
   geom_line(data = paka$em,
             aes(x = Yr, y = SSB, colour = "SS3 EM"), linewidth = 1) +
-  scale_colour_manual(values = c(
-    "opal (with LF)" = "cyan4",
-    "SS3 OM"         = "black",
-    "SS3 EM"         = "red"
-  )) +
+  scale_colour_opal(breaks = c("opal", "SS3 OM", "SS3 EM")) +
   labs(x = "Year", y = "Spawning biomass", colour = NULL) +
   scale_y_continuous(limits = c(0, ybmax_lf * 1.2)) +
-  theme_minimal() +
-  theme(legend.position = "bottom")
+  theme_opal()
 ```
 
 ```{r}
 #| echo: false
 #| label: fig-paka-mcmc-trace
-#| fig-cap: "MCMC traces for the scalar parameters of the 'opakapaka opal (with LF) model --- unfished spawning biomass and the two CPUE catchabilities, on the log scale --- across eight chains (colours). Red dashed lines mark the MLE. Overlapping, stationary chains indicate good mixing."
+#| fig-cap: "MCMC traces for the scalar parameters of the 'opakapaka opal (with LF) model --- unfished spawning biomass and the two CPUE catchabilities, on the log scale --- across eight chains (colours). Navy dashed lines mark the MLE. Overlapping, stationary chains indicate good mixing."
 #| fig-height: 5
 #| fig-width: 8
 
 ggplot(paka$mcmc_trace, aes(iter, value, colour = chain)) +
   geom_line(linewidth = 0.3, alpha = 0.7) +
   geom_hline(data = paka$mcmc_mle_ref, aes(yintercept = mle),
-             linetype = "dashed", colour = "red", linewidth = 0.5) +
+             linetype = "dashed", colour = opal_cols["navy"], linewidth = 0.5) +
   facet_wrap(~ param, scales = "free_y", ncol = 1) +
+  scale_colour_manual(values = opal_chains) +
   labs(x = "Post-warmup iteration", y = "Value", colour = "Chain") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
+  theme_opal()
 ```
 
 ```{r}
 #| echo: false
 #| label: fig-paka-projection
-#| fig-cap: "'Opakapaka spawning biomass: historical uncertainty and a 10-year constant-catch projection (200 draws per method); the last 60 years are shown. Grey solid = estimated MLE; black dashed = SS3 operating model; red = SS3 estimation model. Coloured ribbons give the 50% (darker) and 90% (lighter) intervals for the MVN and MCMC approaches, and the orange line is the MCMC historical median. The vertical dashed line marks the end of the historical period (2024)."
+#| fig-cap: "'Opakapaka spawning biomass: historical uncertainty and a 10-year constant-catch projection (200 draws per method); the last 60 years are shown. Teal solid = estimated MLE; grey dashed = SS3 operating model; navy = SS3 estimation model. Coloured ribbons give the 50% (darker) and 90% (lighter) intervals for the MVN and MCMC approaches, and the amber line is the MCMC historical median. The vertical dashed line marks the end of the historical period (2024)."
 #| fig-height: 4.5
 #| fig-width: 8
-
-pal_proj <- c(MVN = "steelblue", MCMC = "darkorange")
 
 ggplot() +
   geom_ribbon(data = paka$proj_hist_ribbon,
@@ -1226,11 +1282,11 @@ ggplot() +
   geom_line(data = subset(paka$proj_hist_ribbon, method == "MCMC"),
             aes(year, med, colour = method), linewidth = 0.75) +
   geom_line(data = paka$proj_hist_mle, aes(year, sbio),
-            colour = "grey20", linewidth = 0.9) +
+            colour = opal_proj["MVN"], linewidth = 0.9) +
   geom_line(data = paka$proj_om, aes(Yr, SSB),
-            colour = "black", linewidth = 0.8, linetype = "dashed") +
+            colour = opal_cols["truth"], linewidth = 0.8, linetype = "dashed") +
   geom_line(data = paka$proj_em, aes(Yr, SSB),
-            colour = "red", linewidth = 0.8) +
+            colour = opal_cols["navy"], linewidth = 0.8) +
   geom_vline(xintercept = 2024, linetype = "dashed", colour = "grey50") +
   geom_ribbon(data = paka$proj_ribbon,
               aes(year, ymin = lo90, ymax = hi90, fill = method), alpha = 0.15) +
@@ -1238,18 +1294,17 @@ ggplot() +
               aes(year, ymin = lo50, ymax = hi50, fill = method), alpha = 0.30) +
   geom_line(data = paka$proj_ribbon, aes(year, med, colour = method),
             linewidth = 1) +
-  scale_fill_manual(values = pal_proj) +
-  scale_colour_manual(values = pal_proj) +
+  scale_fill_manual(values = opal_proj) +
+  scale_colour_manual(values = opal_proj) +
   labs(x = "Year", y = "Spawning biomass", colour = "Method", fill = "Method") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
+  theme_opal()
 ```
 
 
 ```{r}
 #| echo: false
 #| label: fig-bet-cpue-fit
-#| fig-cap: "Observed, predicted, and simulated standardized CPUE for the fitted`opal` WCPO bigeye tuna diagnostic model (green), shown by index month. Vertical error bars show one fitted standard deviation on the log scale; grey lines show fitted-model simulations. Illustrative fits by MULTIFAN-CL (red) and SS3 (blue) models are also shown. The RMSE of the log-residuals is shown for each model and index month."
+#| fig-cap: "Observed, predicted, and simulated standardized CPUE for the fitted`opal` WCPO bigeye tuna diagnostic model (teal), shown by index month. Vertical error bars show one fitted standard deviation on the log scale; light teal lines show fitted-model simulations. Illustrative fits by MULTIFAN-CL (coral) and SS3 (navy) models are also shown. The RMSE of the log-residuals is shown for each model and index month."
 #| fig-height: 4.5
 #| fig-width: 8
 
@@ -1320,7 +1375,7 @@ cpue_gof_labels <- bet_cpue_combined %>%
 ggplot(bet_cpue_combined, aes(x = year)) +
   geom_line(data = bet_cpue_sim,
             aes(y = simulated, group = sim_id),
-            colour = "grey45", alpha = 0.42, linewidth = 0.32) +
+            colour = opal_role["simulated"], alpha = 0.5, linewidth = 0.32) +
   geom_errorbar(data = filter(bet_cpue_combined, model == "opal"),
                 aes(ymin = lower, ymax = upper), width = 0.35,
                 colour = "grey20", alpha = 0.85, linewidth = 0.3) +
@@ -1342,8 +1397,9 @@ ggplot(bet_cpue_combined, aes(x = year)) +
             inherit.aes = FALSE, show.legend = FALSE) +
   facet_wrap(~ index, scales = "free_y", ncol = 2) +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  scale_colour_opal(breaks = c("opal", "SS3", "MFCL")) +
   labs(x = "Year", y = "Standardized CPUE", colour = "Model") +
-  theme_minimal()
+  theme_opal()
 ```
 
 ```{r}
@@ -1387,7 +1443,7 @@ ggplot(bind_rows(bet_osa_qq, bet_osa_time), aes(x = x, y = y)) +
   geom_point(size = 0.9, alpha = 0.75, colour = "black") +
   facet_grid(index ~ panel, scales = "free_x") +
   labs(x = NULL, y = "OSA residual") +
-  theme_minimal()
+  theme_opal()
 ```
 
 ```{r}
@@ -1450,16 +1506,16 @@ bet_lf_sim_df <- bet_lf_sim_df %>%
 
 ggplot() +
   geom_col(data = filter(bet_lf_mean, series == "Observed"),
-           aes(x = length, y = proportion), fill = "grey75", width = 1.8) +
+           aes(x = length, y = proportion), fill = opal_role["observed"], width = 1.8) +
   geom_line(data = bet_lf_sim_df,
             aes(x = length, y = proportion, group = sim_id),
-            colour = "steelblue", alpha = 0.35, linewidth = 0.35) +
+            colour = opal_role["simulated"], alpha = 0.35, linewidth = 0.35) +
   geom_line(data = filter(bet_lf_mean, series == "Predicted"),
-            aes(x = length, y = proportion), colour = "red3", linewidth = 0.8) +
+            aes(x = length, y = proportion), colour = opal_role["fitted"], linewidth = 0.8) +
   facet_wrap(~ fishery, ncol = 2, scales = "free_y") +
   labs(x = "Length (cm)", y = "Mean proportion") +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
-  theme_minimal()
+  theme_opal()
 ```
 
 ```{r}
@@ -1523,16 +1579,16 @@ bet_wf_sim_df <- bet_wf_sim_df %>%
 
 ggplot() +
   geom_col(data = filter(bet_wf_mean, series == "Observed"),
-           aes(x = weight, y = proportion), fill = "grey75", width = 1.8) +
+           aes(x = weight, y = proportion), fill = opal_role["observed"], width = 1.8) +
   geom_line(data = bet_wf_sim_df,
             aes(x = weight, y = proportion, group = sim_id),
-            colour = "steelblue", alpha = 0.35, linewidth = 0.35) +
+            colour = opal_role["simulated"], alpha = 0.35, linewidth = 0.35) +
   geom_line(data = filter(bet_wf_mean, series == "Predicted"),
-            aes(x = weight, y = proportion), colour = "red3", linewidth = 0.8) +
+            aes(x = weight, y = proportion), colour = opal_role["fitted"], linewidth = 0.8) +
   facet_wrap(~ fishery, ncol = 2, scales = "free_y") +
   labs(x = "Weight (kg)", y = "Mean proportion") +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
-  theme_minimal()
+  theme_opal()
 ```
 
 ```{r}
@@ -1644,14 +1700,12 @@ bet_lf12_panel_years <- select_panel_years(bet_lf12_year$predicted$year, 16L)
 
 ggplot() +
   geom_col(data = filter(bet_lf12_year$observed, year %in% bet_lf12_panel_years),
-           aes(x = length, y = proportion), fill = "grey75", width = 1.8) +
-  geom_line(data = filter(bet_lf12_year$predicted, year %in% bet_lf12_panel_years),
-            aes(x = length, y = proportion), colour = "red3", linewidth = 0.55) +
+           aes(x = length, y = proportion), fill = opal_role["observed"], width = 1.8) +
   geom_line(data = filter(bet_lf12_year$simulated, year %in% bet_lf12_panel_years),
             aes(x = length, y = proportion, group = sim_id),
-            colour = "steelblue", alpha = 0.55, linewidth = 0.3) +
+            colour = opal_role["simulated"], alpha = 0.6, linewidth = 0.3) +
   geom_line(data = filter(bet_lf12_year$predicted, year %in% bet_lf12_panel_years),
-            aes(x = length, y = proportion), colour = "red3", linewidth = 0.4) +
+            aes(x = length, y = proportion), colour = opal_role["fitted"], linewidth = 0.5) +
   geom_text(data = filter(bet_lf12_year$effective_n, year %in% bet_lf12_panel_years),
             aes(x = Inf, y = Inf, label = label),
             inherit.aes = FALSE, hjust = 1.05, vjust = 1.3,
@@ -1659,7 +1713,7 @@ ggplot() +
   facet_wrap(~ year, ncol = 4, scales = "free_y") +
   labs(x = "Length (cm)", y = "Proportion") +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
-  theme_minimal() +
+  theme_opal() +
   theme(strip.text = element_text(size = 7),
         axis.text = element_text(size = 6))
 ```
@@ -1677,14 +1731,12 @@ bet_wf15_panel_years <- select_panel_years(bet_wf15_year$predicted$year, 20L)
 
 ggplot() +
   geom_col(data = filter(bet_wf15_year$observed, year %in% bet_wf15_panel_years),
-           aes(x = weight, y = proportion), fill = "grey75", width = 1.8) +
-  geom_line(data = filter(bet_wf15_year$predicted, year %in% bet_wf15_panel_years),
-            aes(x = weight, y = proportion), colour = "red3", linewidth = 0.5) +
+           aes(x = weight, y = proportion), fill = opal_role["observed"], width = 1.8) +
   geom_line(data = filter(bet_wf15_year$simulated, year %in% bet_wf15_panel_years),
             aes(x = weight, y = proportion, group = sim_id),
-            colour = "steelblue", alpha = 0.52, linewidth = 0.28) +
+            colour = opal_role["simulated"], alpha = 0.6, linewidth = 0.28) +
   geom_line(data = filter(bet_wf15_year$predicted, year %in% bet_wf15_panel_years),
-            aes(x = weight, y = proportion), colour = "red3", linewidth = 0.35) +
+            aes(x = weight, y = proportion), colour = opal_role["fitted"], linewidth = 0.5) +
   geom_text(data = filter(bet_wf15_year$effective_n, year %in% bet_wf15_panel_years),
             aes(x = Inf, y = Inf, label = label),
             inherit.aes = FALSE, hjust = 1.05, vjust = 1.3,
@@ -1692,7 +1744,7 @@ ggplot() +
   facet_wrap(~ year, ncol = 4, scales = "free_y") +
   labs(x = "Weight (kg)", y = "Proportion") +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
-  theme_minimal() +
+  theme_opal() +
   theme(strip.text = element_text(size = 7),
         axis.text = element_text(size = 6))
 ```
@@ -1739,14 +1791,9 @@ plot_bet_comp_residuals <- function(plot_data, y_label) {
   ggplot(plot_summary, aes(x = year, y = bin, fill = residual)) +
     geom_raster(interpolate = FALSE) +
     facet_wrap(~ Fishery, ncol = 2, scales = "free_y") +
-    scale_fill_gradient2(
-      low = "#4575b4", mid = "white", high = "#d73027",
-      midpoint = 0, limits = c(-4, 4), oob = scales::squish,
-      name = "Mean OSA residual"
-    ) +
+    scale_fill_opal_resid() +
     labs(x = "Year", y = y_label) +
-    theme_minimal() +
-    theme(legend.position = "bottom")
+    theme_opal()
 }
 ```
 
@@ -1779,7 +1826,7 @@ plot_bet_comp_residuals(
 ```{r}
 #| echo: false
 #| label: fig-bet-composition-residual-qq
-#| fig-cap: "Normal Q-Q diagnostics for length- and weight-composition OSA residuals in the fitted WCPO bigeye tuna diagnostic model, shown separately by composition type and fishery. The red line is the fixed standard-normal one-to-one reference; it is not fitted separately within panels."
+#| fig-cap: "Normal Q-Q diagnostics for length- and weight-composition OSA residuals in the fitted WCPO bigeye tuna diagnostic model, shown separately by composition type and fishery. The grey line is the fixed standard-normal one-to-one reference; it is not fitted separately within panels."
 #| fig-height: 8
 #| fig-width: 8
 
@@ -1800,13 +1847,14 @@ bet_comp_qq_limit <- max(abs(c(bet_comp_qq$theoretical, bet_comp_qq$residual)), 
 bet_comp_qq_limit <- ceiling(min(max(bet_comp_qq_limit, 4), 5.5) * 2) / 2
 
 ggplot(bet_comp_qq, aes(x = theoretical, y = residual)) +
-  geom_abline(intercept = 0, slope = 1, colour = "red3", linetype = "dashed", linewidth = 0.35) +
+  geom_abline(intercept = 0, slope = 1, colour = opal_cols["struct"],
+              linetype = "dashed", linewidth = 0.35) +
   geom_point(size = 0.28, alpha = 0.25) +
   facet_wrap(~ panel, ncol = 4) +
   coord_equal(xlim = c(-bet_comp_qq_limit, bet_comp_qq_limit),
               ylim = c(-bet_comp_qq_limit, bet_comp_qq_limit)) +
   labs(x = "Theoretical quantiles", y = "Sample quantiles") +
-  theme_minimal() +
+  theme_opal() +
   theme(strip.text = element_text(size = 6.5))
 ```
 
@@ -1844,19 +1892,19 @@ ggplot(bet_rec_df, aes(x = year, y = rdev)) +
   geom_point(aes(colour = estimated), size = 1.1) +
   facet_wrap(~ season_label, ncol = 2) +
   scale_colour_manual(
-    values = c(`FALSE` = "grey40", `TRUE` = "firebrick"),
+    values = c(`FALSE` = unname(opal_cols["struct"]), `TRUE` = unname(opal_cols["teal"])),
     labels = c(`FALSE` = "Fixed", `TRUE` = "Estimated"),
     guide = "none"
   ) +
   scale_x_continuous(breaks = scales::breaks_pretty(n = 6)) +
   labs(x = "Year", y = "Recruitment deviation") +
-  theme_minimal()
+  theme_opal()
 ```
 
 ```{r}
 #| echo: false
 #| label: fig-bet-selectivity-length
-#| fig-cap: "Selectivity-at-length curves for WCPO bigeye tuna fisheries. Blue lines show the fitted opal selectivity curves; dashed black lines show the SS3 reference selectivity curves used to initialise the diagnostic model."
+#| fig-cap: "Selectivity-at-length curves for WCPO bigeye tuna fisheries. Teal lines show the fitted opal selectivity curves; dashed navy lines show the SS3 reference selectivity curves used to initialise the opal model."
 #| fig-height: 8
 #| fig-width: 8
 
@@ -1918,19 +1966,19 @@ bet_selectivity_df <- bind_rows(
 
 ggplot(bet_selectivity_df, aes(x = length, y = selectivity)) +
   geom_line(data = filter(bet_selectivity_df, series == "SS3 reference"),
-            colour = "black", linetype = "dashed", linewidth = 0.45) +
+            colour = opal_models["SS3 reference"], linetype = "dashed", linewidth = 0.45) +
   geom_line(data = filter(bet_selectivity_df, series == "opal estimate"),
-            colour = "cyan4", linewidth = 0.7) +
+            colour = opal_models["opal estimate"], linewidth = 0.7) +
   facet_wrap(~ Fishery, ncol = 3) +
   labs(x = "Length (cm)", y = "Selectivity") +
   coord_cartesian(ylim = c(0, 1)) +
-  theme_minimal()
+  theme_opal()
 ```
 
 ```{r}
 #| echo: false
 #| label: fig-bet-biomass
-#| fig-cap: "Estimated spawning biomass and relative biomass trajectories for the fitted WCPO bigeye tuna diagnostic model. Shaded ribbons show approximate 95% intervals; report-level standard errors are used where finite, with a 10% CV display ribbon used where those standard errors are unavailable. The `opal` model (green) is compared with the SS3 (blue) and MFCL (red) reference models."
+#| fig-cap: "Estimated spawning biomass and relative biomass trajectories for the fitted WCPO bigeye tuna diagnostic model. Shaded ribbons show approximate 95% intervals; report-level standard errors are used where finite, with a 10% CV display ribbon used where those standard errors are unavailable. The `opal` model (teal) is compared with the SS3 (navy) and MFCL (coral) reference models."
 #| fig-height: 5
 #| fig-width: 8
 
@@ -1946,7 +1994,7 @@ bet_biomass <- bind_rows(
     mutate(se = bet_display_se(spawning_biomass, spawning_biomass_se)) %>%
     transmute(
       year,
-      quantity = "Spawning biomass (mt)",
+      quantity = "Spawning~biomass~(mt)",
       value = spawning_biomass,
       lower = pmax(0, spawning_biomass - 1.96 * se),
       upper = spawning_biomass + 1.96 * se
@@ -1955,7 +2003,7 @@ bet_biomass <- bind_rows(
     mutate(se = bet_display_se(sb_sb0, sb_sb0_se)) %>%
     transmute(
       year,
-      quantity = "SB/SB0",
+      quantity = "SB[t]/SB[0]",
       value = sb_sb0,
       lower = pmax(0, sb_sb0 - 1.96 * se),
       upper = sb_sb0 + 1.96 * se
@@ -1964,7 +2012,7 @@ bet_biomass <- bind_rows(
     mutate(se = bet_display_se(dynamic_depletion, dynamic_depletion_se)) %>%
     transmute(
       year,
-      quantity = "SB/SB_F0",
+      quantity = "SB[t]/SB[list(t,F==0)]",
       value = dynamic_depletion,
       lower = pmax(0, dynamic_depletion - 1.96 * se),
       upper = dynamic_depletion + 1.96 * se
@@ -1973,7 +2021,7 @@ bet_biomass <- bind_rows(
   mutate(
     quantity = factor(
       quantity,
-      levels = c("Spawning biomass (mt)", "SB/SB0", "SB/SB_F0")
+      levels = c("Spawning~biomass~(mt)", "SB[t]/SB[0]", "SB[t]/SB[list(t,F==0)]")
     )
   )
 
@@ -2003,9 +2051,9 @@ xmodel_long <- bet_xmodel %>%
       quantity_id == "static_depletion"  ~ static_depletion_se
     ),
     quantity = case_when(
-      quantity_id == "ssb"               ~ "Spawning biomass (mt)",
-      quantity_id == "static_depletion"  ~ "SB/SB0",
-      quantity_id == "depletion"         ~ "SB/SB_F0"
+      quantity_id == "ssb"               ~ "Spawning~biomass~(mt)",
+      quantity_id == "static_depletion"  ~ "SB[t]/SB[0]",
+      quantity_id == "depletion"         ~ "SB[t]/SB[list(t,F==0)]"
     ),
     # MFCL is annual -> use year as-is; SS3 is quarterly -> add season fraction
     year = if_else(model == "MFCL", year, year + (season - 1) / 4),
@@ -2022,9 +2070,11 @@ ggplot(bet_combined, aes(x = year, y = value, colour = model, fill = model)) +
   geom_ribbon(aes(ymin = lower, ymax = upper),
               alpha = 0.18, colour = NA) +
   geom_line(linewidth = 0.9) +
-  facet_wrap(~ quantity, ncol = 1, scales = "free_y") +
+  facet_wrap(~ quantity, nrow = 1, scales = "free_y", labeller = label_parsed) +
+  scale_colour_opal(breaks = c("opal", "SS3", "MFCL")) +
+  scale_fill_opal(breaks = c("opal", "SS3", "MFCL")) +
   labs(x = "Year", y = NULL, colour = "Model", fill = "Model") +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
-  theme_minimal()
+  theme_opal()
 ```
 
