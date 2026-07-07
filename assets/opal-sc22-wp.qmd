@@ -640,7 +640,7 @@ bet_comp_diagnostic_summary <- bet_comp_cell_summary %>%
   arrange(composition, fishery_num)
 bet_comp_residual_source <- bet$diagnostics$residual_source
 if (is.null(bet_comp_residual_source) || !length(bet_comp_residual_source)) {
-  bet_comp_residual_source <- "compResidual::resMulti"
+  bet_comp_residual_source <- "`compResidual::resMulti`"
 }
 bet_comp_mean_input_n_range <- range(
   bet_comp_diagnostic_summary$mean_input_n,
@@ -652,6 +652,8 @@ bet_comp_mean_input_n_range <- range(
 
 \newpage
 
+![](static/opal-HEX-transparent.png){fig-align="center" width="200px"}
+
 # Introduction {#sec-introduction}
 
 [`opal`](https://n-ducharmebarth-noaa.github.io/opal/) --- the **o**pen **p**opulation **a**ssessment **l**ibrary --- is an open-source, modular R package for fisheries stock assessment. The package is built on RTMB [@kristensen_rtmb_2023], an R interface to the Template Model Builder framework [@kristensen_tmb_2016], which provides automatic differentiation of the model objective function and supports gradient-based optimization and the Laplace approximation for models that include random effects. Writing the model in R rather than C++ keeps the entire model definition within a single language environment, which lowers the barrier to inspecting, modifying, and extending the underlying code.
@@ -660,13 +662,15 @@ bet_comp_mean_input_n_range <- range(
 
 The intent of `opal` is to provide assessment scientists with a flexible modelling framework that supports the estimation of random effects; facilitates enhanced model diagnostics, including one-step-ahead (OSA) residuals, simulation self-testing, and posterior predictive checks; and integrates directly into a Bayesian estimation framework. These capabilities are described in @sec-features.
 
-The package source code, function documentation, and worked examples are publicly available ([website](https://n-ducharmebarth-noaa.github.io/opal/), [code repository](https://github.com/n-ducharmebarth-noaa/opal), & [documentation repository](https://github.com/n-ducharmebarth-noaa/opal-documentation)), and the package is distributed under an open-source license. This paper describes the structure of the model (@sec-model-structure), its principal features (@sec-features), and two case studies that illustrate its application to a real-data tuna assessment and a simulated single-species assessment (@sec-case-studies).
+The package source code, function documentation, and worked examples are publicly available ([website](https://n-ducharmebarth-noaa.github.io/opal/), [code repository](https://github.com/n-ducharmebarth-noaa/opal), & [documentation repository](https://github.com/n-ducharmebarth-noaa/opal-documentation)), and the package is distributed under an open-source license. This paper describes the structure of the model (@sec-model-structure), its principal features (@sec-features), and two case studies that illustrate its application to a simulated single-species assessment and a real-data tuna assessment (@sec-case-studies).
 
 # Model structure {#sec-model-structure}
 
 `opal` estimates age-structured population dynamics and accommodates length-based processes. The population is tracked as numbers-at-age. Biological quantities --- weight, maturity, fecundity, natural mortality, and sex ratio --- may be supplied on either an age basis or a length basis: a vector defined over age classes is used directly, while a vector defined over length bins is converted to age through a probability-of-length-at-age (PLA) matrix. Selectivity is likewise defined on a length basis and mapped to age through the PLA. This structure allows population demographics to be specified in terms of either age or length, and allows the model to fit multiple data types: relative abundance indices (CPUE), length composition, and weight composition. Where time-varying or hierarchically structured processes are required, parameters may be specified as random effects and integrated out using the Laplace approximation provided by RTMB [@kristensen_tmb_2016].
 
-The model is implemented as a single objective function, `opal_model()`, that returns the negative log-likelihood (NLL) for a given set of parameters and data. Rather than encoding the population dynamics and observation model as a single monolithic routine, `opal_model()` orchestrates a sequence of standalone module functions, each responsible for one component of the calculation. The principal modules, in the order they are evaluated, are: mean length-at-age (`get_growth()`); the standard deviation of length-at-age (`get_sd_at_age()`); the PLA matrix (`get_pla()`); weight-, maturity-, and fecundity-at-age (`get_weight_at_length()`, `get_maturity_at_age()`, and a resolver, `resolve_bio_vector()`, that accepts either age- or length-basis inputs); selectivity-at-age (`get_selectivity()`, with the parametric forms `sel_logistic()` and `sel_double_normal()`); initial equilibrium numbers-at-age (`get_initial_numbers()`); the forward population dynamics and harvest (the dynamics routine and `get_harvest_rate()`); recruitment (`get_recruitment()`); the data likelihoods (`get_cpue_like()`, `get_length_like()`, `get_weight_like()`); and the prior and penalty terms (`get_recruitment_prior()`, `evaluate_priors()`). The modular design that this structure reflects is described further in @sec-future-development.
+The model is implemented as a single objective function, `opal_model()`, that returns the negative log-likelihood (NLL) for a given set of parameters and data. Rather than encoding the population dynamics and observation model as a single monolithic routine, `opal_model()` orchestrates a sequence of standalone, individually documented module functions, each responsible for one component of the calculation. Population-model components --- growth, selectivity, recruitment, and the data likelihoods --- are implemented as separate exported functions rather than embedded in a single routine, so that components can be modified, replaced, or extended independently, and so that individual modules can be tested in isolation. The collection of module functions is registered through a single accessor for use when the model is passed to the Bayesian sampler. This modular organization is intended to make the codebase tractable to maintain, human readable and to lower the barrier to community contribution.
+
+The principal modules, in the order they are evaluated, are: mean length-at-age (`get_growth()`); the standard deviation of length-at-age (`get_sd_at_age()`); the PLA matrix (`get_pla()`); weight-, maturity-, and fecundity-at-age (`get_weight_at_length()`, `get_maturity_at_age()`, and a resolver, `resolve_bio_vector()`, that accepts either age- or length-basis inputs); selectivity-at-age (`get_selectivity()`, with the parametric forms `sel_logistic()` and `sel_double_normal()`); initial equilibrium numbers-at-age (`get_initial_numbers()`); the forward population dynamics and harvest (the dynamics routine and `get_harvest_rate()`); recruitment (`get_recruitment()`); the data likelihoods (`get_cpue_like()`, `get_length_like()`, `get_weight_like()`); and the prior and penalty terms (`get_recruitment_prior()`, `evaluate_priors()`). 
 
 ## Population dynamics {#sec-population-dynamics}
 
@@ -835,6 +839,12 @@ $$
 
 with the lognormal recruitment bias adjustment applied in the recruitment equation (@sec-recruitment). Initial age-structure deviations, when estimated, use the analogous normal density. These terms can be interpreted as penalties in an MLE fit or as prior/random-effect contributions in the joint posterior. This shared formulation allows the same model code to be optimized with `nlminb` or sampled as a Bayesian model (@sec-bayesian-inference).
 
+# Development pathway {#sec-dev-pathway}
+
+Software development follows a defined contribution workflow. The package uses a two-branch structure: a `dev` branch for active development and a stable `main` branch for tested, release-ready code. New features are developed on branches forked from `dev` and are expected to include roxygen function documentation and minimal, self-contained `testthat` unit tests. Contributions are submitted as pull requests against `dev`, and are incorporated into `main` only after they pass the package checks --- that is, after all tests pass and the package and its vignettes can be built.
+
+Integrated testing operates at several levels. Unit tests verify the behaviour of individual modules; for example, the growth tests confirm that `get_growth()` returns the reference lengths at the reference ages and is monotonic, and that the weight, maturity, and PLA conversions behave as expected. Integration tests verify that the modules combine correctly within the full `opal_model()` objective function and that the objective and its gradient are finite when particular data and likelihood components are active. A numerical-regression baseline (`opal_baseline`), produced and checked through a dedicated vignette, stores a complete reference evaluation of the bigeye case-study model --- the objective value, the gradient, the report output, and timing --- so that a refactored build can be compared against the reference to detect unintended numerical changes and performance regressions. Continuous-integration checks (`R-CMD-check`) are run automatically on the repository.
+
 # Features {#sec-features}
 
 ### Bayesian inference {#sec-bayesian-inference}
@@ -853,23 +863,11 @@ Projections are conditioned on the specified future catch and propagate paramete
 
 # Case studies {#sec-case-studies}
 
-Two case studies are distributed with the package as worked examples. The first applies `opal` to real data from an existing WCPFC tuna assessment; the second applies it to simulated data for which the underlying population dynamics are known. Detailed configuration, code, and outputs for each are provided in the package vignettes.
-
-## 2020 western and central Pacific Ocean bigeye tuna {#sec-case-bet}
-
-The first case study uses the data from a fleets-as-areas model described in the appendix of the 2020 assessment of bigeye tuna (*Thunnus obesus*) in the western and central Pacific Ocean [WCPO\;@ducharme-barth_stock_2020]. The bundled data object contains the biological parameters, catch and standardized CPUE observations, length and weight composition data, configured at a quarterly time step across the fisheries defined in the fleets-as-areas assessment, with selectivity specified by fishery as either logistic or double-normal forms.
-
-The current diagnostic configuration uses the quarterly standardized CPUE series as four seasonal indices, fits length compositions from fisheries 8--14, and fits weight compositions from fisheries 1, 2, 3, 4, 6, 7, and 15. Fishery 8 length compositions are retained but strongly downweighted, and weight-composition fishery 5 remains inactive after diagnostic runs failed to converge cleanly. Recruitment deviations are estimated across the model period, catchability is estimated separately by index, and selected selectivity parameters are estimated for the fisheries with active composition data. Growth, natural mortality, steepness, recruitment variability, effort creep, and the remaining selectivity parameters are fixed at the bundled reference values.
-
-The fit converged according to `nlminb`, with the constrained KKT-style gradient close to zero despite a larger raw maximum gradient caused by active bounds (@tbl-bet-fit-summary). Fitting this diagnostic configuration from the configured starting values to the maximum-likelihood estimate took `r bet_mle_runtime_text` on the workstation used to build this document, requiring `r bet_mle_iterations` optimizer iterations, `r bet_mle_function_evals` function evaluations, and `r bet_mle_gradient_evals` gradient evaluations. The additive objective decomposition is dominated numerically by the composition likelihoods, especially the weight-composition component, while the CPUE component contributes the abundance trend information and the recruitment-deviation density regularizes annual departures from the stock-recruitment curve. The estimated unfished spawning biomass is approximately `r format(round(bet$report$B0), big.mark = ",")` mt, and the final-year relative spawning biomass is `r round(bet_final_sb_b0, 3)` when scaled by $SB_0$ (@tbl-bet-depletion). The dynamic depletion ratio is slightly higher (`r round(bet_final_dyn_dep, 3)`) because it uses the time-varying unfished spawning biomass denominator rather than the static $SB_0$ denominator.
-
-Diagnostic plots in the `opal` BET vignette compare observed and predicted CPUE by seasonal index, observed and predicted length and weight compositions, fitted recruitment deviations, and estimated selectivity-at-length and selectivity-at-age curves. The CPUE fit in @fig-bet-cpue-fit tracks the broad decline in standardized abundance from the early 1950s through the low-abundance period in the 2000s, while allowing the four quarterly indices to retain their own scale and observation uncertainty; simulated CPUE series from the fitted model show the amount of variation expected under the fitted lognormal observation model. The CPUE OSA residuals in @fig-bet-osa-residuals are centred close to zero and fall within approximately $\pm 2$ residual units, with SDNRs below one for each index month (@tbl-bet-cpue-sdnr). These residuals use the randomized quantile-residual logic underlying OSA diagnostics for latent-variable models, so approximate standard-normal behaviour is expected when the observation model is adequate [@dunn_randomized_1996; @thygesen_validation_2017]. The mean length- and weight-composition diagnostics in @fig-bet-lf-diagnostics and @fig-bet-wf-diagnostics aggregate observations, predictions, and simulations over all years for each active composition fishery; the simulated lines are generated on the same mean-composition scale as the red fitted line, so their average is centred on the fitted composition. To show the unaggregated temporal structure, @fig-bet-lf12-year-composition and @fig-bet-wf15-year-composition give year-specific examples for length-composition fishery 12 and weight-composition fishery 15. Example LF and WF composition OSA residual diagnostics are shown for fishery 12 and fishery 15 in @fig-bet-lf-composition-residuals and @fig-bet-wf-composition-residuals; these two panels are examples rather than the full residual set. The by-fishery Q-Q diagnostics in @fig-bet-composition-residual-qq summarise all active composition residuals against a fixed standard-normal reference line, rather than a fitted Q-Q line, so below-one dispersion remains visible. Following the SBT diagnostic summaries, @tbl-bet-composition-sdnr separates the bin-level OSA residual SDNR from the Francis mean-composition SDNR and McAllister-Ianelli effective-sample-size diagnostics. The OSA residuals are generated with `r bet_comp_residual_source` for the active multinomial composition likelihoods, and the near-one bin-level SDNRs are conditional on the variance-adjusted input sample sizes used in the likelihood; the mean input $N$ by fishery ranges from `r signif(bet_comp_mean_input_n_range[1], 3)` to `r signif(bet_comp_mean_input_n_range[2], 3)` after downweighting. The close Q-Q alignment is therefore a check of the randomized bin-level residual distribution for the weighted pseudo-data likelihood, not evidence that the raw composition data are perfectly fitted.
-
-The selectivity diagnostics in @tbl-bet-selectivity-issues and @fig-bet-selectivity-length show where the fitted `opal` selectivity curves differ from the SS3 reference curves and where estimated terms are constrained by bounds. Most flagged issues are bound-related rather than unconstrained interior failures, which is consistent with the small KKT-style gradient in @tbl-bet-fit-summary despite the larger raw maximum gradient. The recruitment deviations in @fig-bet-recruitment-deviations show the seasonal pattern of estimated process variation. The biomass and depletion trajectories in @fig-bet-biomass show the long-term decline in spawning biomass relative to unfished conditions and the partial separation between $SB/SB_0$ and dynamic depletion. As with the 'opakapaka example, these results are intended to demonstrate the end-to-end workflow rather than to replace a full production assessment model.
+Two case studies are distributed with the package as worked examples. The first applies `opal` to simulated data for which the underlying population dynamics are known; the second applies it to real data from an existing WCPFC tuna assessment. Detailed configuration, code, and outputs for each are provided in the package vignettes. In both cases the examples are purely illustrative and developed for the purpose of demonstrating the model structure, features, or comparability with existing software platforms. They are not intended to be used as a basis for management advice.
 
 ## Hawai'i 'Opakapaka {#sec-case-paka}
 
-The second case study uses simulated data for Hawai'i 'opakapaka (*Pristipomoides filamentosus*), a deepwater snapper, for which the true population dynamics are known. The reference model was constructed in SS3 [v3.30.19\; @methot_stock_2013] as part of an associated simulation study [@oshima_opakapaka_2026], which provides both an operating model that generates the data and an estimation model fitted to those data. The `opal` model covers the historical period 1949--2023 with three fleets --- a commercial fishery, a non-commercial fishery, and a research-fishery survey --- at an annual time step, and fits to two CPUE indices, generated with negligible observation error, together with length composition data from the commercial and survey fleets.
+The first case study uses simulated data for Hawai'i 'opakapaka (*Pristipomoides filamentosus*), a deepwater snapper, for which the true population dynamics are known. The reference model was constructed in SS3 [v3.30.19\; @methot_stock_2013] as part of an associated simulation study [@oshima_opakapaka_2026], which provides both an operating model that generates the data and an estimation model fitted to those data. The `opal` model covers the historical period 1949--2023 with three fleets --- a commercial fishery, a non-commercial fishery, and a research-fishery survey --- at an annual time step, and fits to two CPUE indices, generated with negligible observation error, together with length composition data from the commercial and survey fleets.
 
 The case study is configured to estimate population scale, annual recruitment deviations, initial age structure, and selectivity parameters for the fleets that have length composition data, with the remaining life-history and fishery parameters fixed at the values used to generate the simulated data. Because the operating model is built in SS3, the case study also serves as a cross-platform comparison: it provides a basis for evaluating the correspondence between the `opal` and SS3 population-dynamics calculations under identical inputs, and for comparing the spawning-biomass trajectory and parameter estimates from `opal` against the operating-model truth and the SS3 estimation model.
 
@@ -878,19 +876,42 @@ Fitting the length composition likelihood and freeing selectivity for the commer
 
 The same model was also fitted with the Bayesian workflow (@sec-bayesian-inference): a dense-metric NUTS sampler was run for eight chains, which were well mixed with split-$\hat{R}$ close to one and large effective sample sizes for the scalar parameters and recruitment deviations (@tbl-paka-mcmc-diag, @fig-paka-mcmc-trace). The stock was then projected ten years forward under a constant catch held at the terminal year's level, propagating parameter uncertainty through both the MVN and MCMC approaches (@sec-projections). The two approaches agree closely at the projection-start state, and the projection intervals widen only gradually because 'opakapaka is long-lived and matures slowly, so the existing adult biomass declines nearly deterministically under constant catch while future recruitment and selectivity uncertainty accumulate over the projection horizon (@fig-paka-projection).
 
+## 2020 western and central Pacific Ocean bigeye tuna {#sec-case-bet}
+
+The second case study uses the data from a fleets-as-areas model described in the appendix of the 2020 assessment of bigeye tuna (*Thunnus obesus*) in the western and central Pacific Ocean [WCPO\;@ducharme-barth_stock_2020]. The bundled data object contains the biological parameters, catch and standardized CPUE observations, length and weight composition data, configured at a quarterly time step across the fisheries defined in the fleets-as-areas assessment, with selectivity specified by fishery as either logistic or double-normal forms.
+
+The current diagnostic configuration uses the quarterly standardized CPUE series as four seasonal indices, fits length compositions from fisheries 8--14, and fits weight compositions from fisheries 1, 2, 3, 4, 6, 7, and 15. Fishery 8 length compositions are retained but strongly downweighted, and weight-composition fishery 5 remains inactive after diagnostic runs failed to converge cleanly. Recruitment deviations are estimated across the model period, catchability is estimated separately by index, and selected selectivity parameters are estimated for the fisheries with active composition data. Growth, natural mortality, steepness, recruitment variability, effort creep, and the remaining selectivity parameters are fixed at the bundled reference values.
+
+The fit converged according to `nlminb`, with the constrained KKT-style gradient close to zero despite a larger raw maximum gradient caused by active bounds (@tbl-bet-fit-summary). Fitting this diagnostic configuration from the configured starting values to the maximum-likelihood estimate took `r bet_mle_runtime_text` on the workstation used to build this document, requiring `r bet_mle_iterations` optimizer iterations, `r bet_mle_function_evals` function evaluations, and `r bet_mle_gradient_evals` gradient evaluations. The additive objective decomposition is dominated numerically by the composition likelihoods, especially the weight-composition component, while the CPUE component contributes the abundance trend information and the recruitment-deviation density regularizes annual departures from the stock-recruitment curve. The estimated unfished spawning biomass is approximately `r format(round(bet$report$B0), big.mark = ",")` mt, and the final-year relative spawning biomass is `r round(bet_final_sb_b0, 3)` when scaled by $SB_0$ (@tbl-bet-depletion). The dynamic depletion ratio is slightly higher (`r round(bet_final_dyn_dep, 3)`) because it uses the time-varying unfished spawning biomass denominator rather than the static $SB_0$ denominator.
+
+Diagnostic plots in the `opal` BET vignette compare observed and predicted CPUE by seasonal index, observed and predicted length and weight compositions, fitted recruitment deviations, and estimated selectivity-at-length and selectivity-at-age curves. The CPUE fit in @fig-bet-cpue-fit tracks the broad decline in standardized abundance from the early 1950s through the low-abundance period in the 2000s, while allowing the four quarterly indices to retain their own scale and observation uncertainty; simulated CPUE series from the fitted model show the amount of variation expected under the fitted lognormal observation model. Additionally, illustrative fits to the same index from MULTIFAN-CL and SS3 models are also shown for reference. The CPUE OSA residuals in @fig-bet-osa-residuals are centred close to zero and fall within approximately $\pm 2$ residual units, with SDNRs below one for each index month (@tbl-bet-cpue-sdnr). These residuals use the randomized quantile-residual logic underlying OSA diagnostics for latent-variable models, so approximate standard-normal behaviour is expected when the observation model is adequate [@dunn_randomized_1996; @thygesen_validation_2017]. The mean length- and weight-composition diagnostics in @fig-bet-lf-diagnostics and @fig-bet-wf-diagnostics aggregate observations, predictions, and simulations over all years for each active composition fishery; the simulated lines are generated on the same mean-composition scale as the red fitted line, so their average is centred on the fitted composition. To show the unaggregated temporal structure, @fig-bet-lf12-year-composition and @fig-bet-wf15-year-composition give year-specific examples for length-composition fishery 12 and weight-composition fishery 15. Example LF and WF composition OSA residual diagnostics are shown for fishery 12 and fishery 15 in @fig-bet-lf-composition-residuals and @fig-bet-wf-composition-residuals; these two panels are examples rather than the full residual set. The by-fishery Q-Q diagnostics in @fig-bet-composition-residual-qq summarise all active composition residuals against a fixed standard-normal reference line, rather than a fitted Q-Q line, so below-one dispersion remains visible. Following the SBT diagnostic summaries, @tbl-bet-composition-sdnr separates the bin-level OSA residual SDNR from the Francis mean-composition SDNR and McAllister-Ianelli effective-sample-size diagnostics. The OSA residuals are generated with `r bet_comp_residual_source` for the active multinomial composition likelihoods, and the near-one bin-level SDNRs are conditional on the variance-adjusted input sample sizes used in the likelihood; the mean input $N$ by fishery ranges from `r signif(bet_comp_mean_input_n_range[1], 3)` to `r signif(bet_comp_mean_input_n_range[2], 3)` after downweighting. The close Q-Q alignment is therefore a check of the randomized bin-level residual distribution for the weighted pseudo-data likelihood, not evidence that the raw composition data are perfectly fitted.
+
+The selectivity diagnostics in @tbl-bet-selectivity-issues and @fig-bet-selectivity-length show where the fitted `opal` selectivity curves differ from the SS3 reference curves and where estimated terms are constrained by bounds. Most flagged issues are bound-related rather than unconstrained interior failures, which is consistent with the small KKT-style gradient in @tbl-bet-fit-summary despite the larger raw maximum gradient. The recruitment deviations in @fig-bet-recruitment-deviations show the seasonal pattern of estimated process variation. The biomass and depletion trajectories in @fig-bet-biomass show the long-term decline in spawning biomass ($SB$), static ($SB/SB_0$), and dynamic depletion ($SB_t/SB_{t,F=0}$) relative to MULTIFAN-CL and SS3 models fitted to the same data set. As with the 'opakapaka example, these results are intended to demonstrate the end-to-end `opal` workflow as a proof-of-concept and do not reflect a completely tuned, full production assessment model.
+
 # Discussion {#sec-discussion}
 
-`opal` provides an age-structured, length-based stock assessment framework implemented in RTMB, with a modular internal structure, support for multiple data types and likelihood forms, random-effects estimation, catch-based projections, Bayesian inference, and a set of built-in diagnostics. The two case studies demonstrate its application to both a real-data tuna assessment configured as an age-structured production model and a simulated single-species assessment that fits to index and length composition data and supports comparison against a known operating model.
+`opal` provides an age-structured, length-based stock assessment framework implemented in RTMB, with a modular internal structure, support for multiple data types and likelihood forms, random-effects estimation, catch-based projections, Bayesian inference, and a set of built-in diagnostics. The two case studies demonstrate its application to fit length composition, weight composition, and index data in single-species assessments in both a simulated data context, where the truth is known, and with a real data tuna example. Both examples serve to highlight the successful proof-of-concept of the `opal` framework in its ability to adequately estimate population dynamics and easily provide high-quality diagnostic outputs for model evaluation and validation.
 
-## Future development {#sec-future-development}
+The continued development of case-studies is central to the development of `opal`, with case studies serving multiple purposes: they provide a basis for testing and validating the model, they demonstrate the model's capabilities to the broader community, and they provide a starting point for new users to learn how to use the software. Additionally, new modules are added to the code base to meet the needs of the case studies as they arise. The integrated testing approach ensures that new modules do not break existing functionality, while safely providing a pathway to grow model functionality. Use of simulated data in case studies provides an objective basis for evaluating `opal`'s performance, and for cross-platform comparisons with existing software. 
 
-`opal` is constructed as a set of standalone, individually documented module functions that are combined within the `opal_model()` objective function. Population-model components --- growth, selectivity, recruitment, and the data likelihoods --- are implemented as separate exported functions rather than embedded in a single routine, so that components can be modified, replaced, or extended independently, and so that individual modules can be tested in isolation. The collection of module functions is registered through a single accessor (`bet_globals()`) for use when the model is passed to the Bayesian sampler. This modular organization is intended to make the codebase tractable to maintain and to lower the barrier to community contribution.
+Cross-platform comparisons...
 
-Software development follows a defined contribution workflow. The package uses a two-branch structure: a `dev` branch for active development and a stable `main` branch for tested, release-ready code. New features are developed on branches forked from `dev` and are expected to include roxygen function documentation and minimal, self-contained `testthat` unit tests. Contributions are submitted as pull requests against `dev`, and are incorporated into `main` only after they pass the package checks --- that is, after all tests pass and the package and its vignettes can be built.
+Diagnostics...
 
-Integrated testing operates at several levels. Unit tests verify the behaviour of individual modules; for example, the growth tests confirm that `get_growth()` returns the reference lengths at the reference ages and is monotonic, and that the weight, maturity, and PLA conversions behave as expected. Integration tests verify that the modules combine correctly within the full `opal_model()` objective function and that the objective and its gradient are finite when particular data and likelihood components are active. A numerical-regression baseline (`opal_baseline`), produced and checked through a dedicated vignette, stores a complete reference evaluation of the bigeye case-study model --- the objective value, the gradient, the report output, and timing --- so that a refactored build can be compared against the reference to detect unintended numerical changes and performance regressions. Continuous-integration checks (`R-CMD-check`) are run automatically on the repository.
+Challenges... 
 
-Several extensions are planned. Priorities identified for ongoing work include refinement of the case studies; code optimization, particularly of the selectivity and size-composition likelihood calculations; and additional functionality such as biological and fishery reference points, alternative selectivity forms, and conditional age-at-length data. Within the WCPFC context, planned work also includes a side-by-side comparison of MULTIFAN-CL [@fournier_multifan-cl_1998], SS3 [@methot_stock_2013], and `opal` for a WCPO bigeye tuna fleets-as-areas model, an Indian Ocean yellowfin tuna fleets-as-areas case study based on simulated data, and potential application to the 2027 North Pacific blue shark stock assessment.
+Despite the progress to date, `opal` is far from a finished product. As `opal` transitions into the next phase of development multiple rich avenues for continued work exist across several core areas: documentation, development of the user interface, model testing, code optimization, research, and feature development. This work extends beyond simply coding a technically-sound population dynamics model, but also encompasses managing the user experience so that `opal` is an accessible, easy to learn tool that does what is needed. Continued success will depend on both engagement and investment from the broader fisheries assessment community beyond the existing development team. Additionally, a focused and prioritized list of requirements is needed to inform the development pathway and to ensure that the resulting software meets the needs of the community. In the interim, several extensions are planned based on either existing feature lists [@punt_essential_2020] or the development team's experiences with `opal` to date. Areas identified for ongoing work include:
+
+- refinement of existing case studies; 
+- development of additional case studies (e.g., Indian Ocean yellowfin tuna fleets-as-areas case study based on simulated data);
+- code optimization (particularly of the selectivity and size-composition likelihood calculations);
+- derivation of biological and fishery reference points;
+- additional likelihood components (e.g., age, tag or close-kin mark-recapture data);
+- alternative selectivity forms;
+- and additional population dimensionality (e.g., spatial structure, sex, or length).
+
+Within the context of the WCPFC, `opal` could be applied to the upcoming assessment of north Pacific Ocean blue shark (*Prionace glauca*), or in a research capacity to the assessment of south Pacific albacore (*Thunnus alalunga*).
+
 
 # Acknowledgements {#sec-acknowledgements}
 
@@ -908,6 +929,59 @@ Generative AI tools were used to assist with code development, refactoring, and 
 \newpage
 
 # Tables {#sec-tables}
+
+```{r}
+#| label: tbl-paka-lf-convergence
+#| tbl-cap: "opal (with LF) convergence diagnostics: positive-definite Hessian, maximum absolute gradient (mgc), minimum Hessian eigenvalue, and parameter estimability."
+#| echo: false
+
+est <- paka$estim
+
+if (inherits(est, "condition")) {
+  # check_estimability() failed and the condition was cached in Block B.
+  min_eig_chr  <- "\u2014"
+  estim_status <- paste0("check failed: ", conditionMessage(est))
+} else {
+  n_bad       <- length(est$WhichBad)
+  min_eig_chr <- formatC(min(est$Eigen$values), format = "e", digits = 2)
+  estim_status <- if (n_bad == 0) {
+    "0 (all parameters estimable)"
+  } else {
+    bad_names <- rownames(est$Hess)[est$WhichBad]
+    paste0(n_bad, " (", paste(bad_names, collapse = ", "), ")")
+  }
+}
+
+conv_tbl <- data.frame(
+  Diagnostic = c("Positive-definite Hessian",
+                 "Max |gradient| (mgc)",
+                 "Min Hessian eigenvalue",
+                 "Inestimable parameters"),
+  Value = c(as.character(paka$pdh),
+            paka$mgc_sci,
+            min_eig_chr,
+            estim_status),
+  check.names = FALSE
+)
+
+knitr::kable(conv_tbl, booktabs = TRUE, align = c("l", "l"))
+```
+
+```{r}
+#| label: tbl-paka-mcmc-diag
+#| tbl-cap: "Posterior summaries and MCMC convergence diagnostics for the 'opakapaka opal (with LF) model: the MLE estimate, posterior mean and standard deviation, 5th and 95th percentiles, bulk and tail effective sample sizes (ESS), and split-Rhat, for the scalar parameters (unfished spawning biomass and the two CPUE catchabilities) and three representative recruitment deviations."
+#| echo: false
+
+mdiag <- paka$mcmc_diag
+knitr::kable(
+  mdiag[, c("variable", "mle", "mean", "sd", "q5", "q95",
+            "ess_bulk", "ess_tail", "rhat")],
+  col.names = c("Parameter", "MLE", "Mean", "SD", "q5", "q95",
+                "ESS bulk", "ESS tail", "Rhat"),
+  digits = 3, booktabs = TRUE, align = c("l", rep("r", 8))
+)
+```
+
 
 ```{r}
 #| label: tbl-bet-fit-summary
@@ -987,7 +1061,7 @@ knitr::kable(bet_cpue_sdnr_tbl, booktabs = TRUE, align = c("l", "r", "r", "r", "
 
 ```{r}
 #| label: tbl-bet-composition-sdnr
-#| tbl-cap: "Composition residual diagnostics by composition type and fishery for the fitted WCPO bigeye tuna diagnostic model. OSA SDNR is the standard deviation of finite bin-level OSA residuals returned by compResidual::resMulti(); the 95% interval uses the same chi-square SDNR interval as the SBT diagnostics. Francis and McAllister-Ianelli columns follow the SBT composition-diagnostic summaries."
+#| tbl-cap: "Composition residual diagnostics by composition type and fishery for the fitted WCPO bigeye tuna diagnostic model. OSA SDNR is the standard deviation of finite bin-level OSA residuals returned by `compResidual::resMulti()`; the 95% interval uses the same chi-square SDNR interval as the SBT diagnostics. Francis and McAllister-Ianelli columns follow the SBT composition-diagnostic summaries."
 #| echo: false
 
 bet_comp_sdnr_tbl <- bet_comp_diagnostic_summary %>%
@@ -1085,67 +1159,97 @@ knitr::kable(
 )
 ```
 
-```{r}
-#| label: tbl-paka-lf-convergence
-#| tbl-cap: "opal (with LF) convergence diagnostics: positive-definite Hessian, maximum absolute gradient (mgc), minimum Hessian eigenvalue, and parameter estimability."
-#| echo: false
-
-est <- paka$estim
-
-if (inherits(est, "condition")) {
-  # check_estimability() failed and the condition was cached in Block B.
-  min_eig_chr  <- "\u2014"
-  estim_status <- paste0("check failed: ", conditionMessage(est))
-} else {
-  n_bad       <- length(est$WhichBad)
-  min_eig_chr <- formatC(min(est$Eigen$values), format = "e", digits = 2)
-  estim_status <- if (n_bad == 0) {
-    "0 (all parameters estimable)"
-  } else {
-    bad_names <- rownames(est$Hess)[est$WhichBad]
-    paste0(n_bad, " (", paste(bad_names, collapse = ", "), ")")
-  }
-}
-
-conv_tbl <- data.frame(
-  Diagnostic = c("Positive-definite Hessian",
-                 "Max |gradient| (mgc)",
-                 "Min Hessian eigenvalue",
-                 "Inestimable parameters"),
-  Value = c(as.character(paka$pdh),
-            paka$mgc_sci,
-            min_eig_chr,
-            estim_status),
-  check.names = FALSE
-)
-
-knitr::kable(conv_tbl, booktabs = TRUE, align = c("l", "l"))
-```
-
-```{r}
-#| label: tbl-paka-mcmc-diag
-#| tbl-cap: "Posterior summaries and MCMC convergence diagnostics for the 'opakapaka opal (with LF) model: the MLE estimate, posterior mean and standard deviation, 5th and 95th percentiles, bulk and tail effective sample sizes (ESS), and split-Rhat, for the scalar parameters (unfished spawning biomass and the two CPUE catchabilities) and three representative recruitment deviations."
-#| echo: false
-
-mdiag <- paka$mcmc_diag
-knitr::kable(
-  mdiag[, c("variable", "mle", "mean", "sd", "q5", "q95",
-            "ess_bulk", "ess_tail", "rhat")],
-  col.names = c("Parameter", "MLE", "Mean", "SD", "q5", "q95",
-                "ESS bulk", "ESS tail", "Rhat"),
-  digits = 3, booktabs = TRUE, align = c("l", rep("r", 8))
-)
-```
 
 \newpage
 
 # Figures {#sec-figures}
 
+```{r}
+#| echo: false
+#| label: fig-paka-lf-biomass
+#| fig-cap: "Estimated spawning-biomass trajectory for the 'opakapaka opal (with LF) model compared with the SS3 operating model (OM) and estimation model (EM), 1949--2023."
+#| fig-height: 4.5
+#| fig-width: 8
+
+ybmax_lf <- max(paka$ssb$estimate, paka$om$SSB, paka$em$SSB, na.rm = TRUE)
+
+ggplot() +
+  geom_line(data = paka$ssb,
+            aes(x = year, y = estimate, colour = "opal (with LF)"),
+            linewidth = 1) +
+  geom_line(data = paka$om,
+            aes(x = Yr, y = SSB, colour = "SS3 OM"), linewidth = 1) +
+  geom_line(data = paka$em,
+            aes(x = Yr, y = SSB, colour = "SS3 EM"), linewidth = 1) +
+  scale_colour_manual(values = c(
+    "opal (with LF)" = "cyan4",
+    "SS3 OM"         = "black",
+    "SS3 EM"         = "red"
+  )) +
+  labs(x = "Year", y = "Spawning biomass", colour = NULL) +
+  scale_y_continuous(limits = c(0, ybmax_lf * 1.2)) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| echo: false
+#| label: fig-paka-mcmc-trace
+#| fig-cap: "MCMC traces for the scalar parameters of the 'opakapaka opal (with LF) model --- unfished spawning biomass and the two CPUE catchabilities, on the log scale --- across eight chains (colours). Red dashed lines mark the MLE. Overlapping, stationary chains indicate good mixing."
+#| fig-height: 5
+#| fig-width: 8
+
+ggplot(paka$mcmc_trace, aes(iter, value, colour = chain)) +
+  geom_line(linewidth = 0.3, alpha = 0.7) +
+  geom_hline(data = paka$mcmc_mle_ref, aes(yintercept = mle),
+             linetype = "dashed", colour = "red", linewidth = 0.5) +
+  facet_wrap(~ param, scales = "free_y", ncol = 1) +
+  labs(x = "Post-warmup iteration", y = "Value", colour = "Chain") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| echo: false
+#| label: fig-paka-projection
+#| fig-cap: "'Opakapaka spawning biomass: historical uncertainty and a 10-year constant-catch projection (200 draws per method); the last 60 years are shown. Grey solid = estimated MLE; black dashed = SS3 operating model; red = SS3 estimation model. Coloured ribbons give the 50% (darker) and 90% (lighter) intervals for the MVN and MCMC approaches, and the orange line is the MCMC historical median. The vertical dashed line marks the end of the historical period (2024)."
+#| fig-height: 4.5
+#| fig-width: 8
+
+pal_proj <- c(MVN = "steelblue", MCMC = "darkorange")
+
+ggplot() +
+  geom_ribbon(data = paka$proj_hist_ribbon,
+              aes(year, ymin = lo90, ymax = hi90, fill = method), alpha = 0.12) +
+  geom_ribbon(data = paka$proj_hist_ribbon,
+              aes(year, ymin = lo50, ymax = hi50, fill = method), alpha = 0.25) +
+  geom_line(data = subset(paka$proj_hist_ribbon, method == "MCMC"),
+            aes(year, med, colour = method), linewidth = 0.75) +
+  geom_line(data = paka$proj_hist_mle, aes(year, sbio),
+            colour = "grey20", linewidth = 0.9) +
+  geom_line(data = paka$proj_om, aes(Yr, SSB),
+            colour = "black", linewidth = 0.8, linetype = "dashed") +
+  geom_line(data = paka$proj_em, aes(Yr, SSB),
+            colour = "red", linewidth = 0.8) +
+  geom_vline(xintercept = 2024, linetype = "dashed", colour = "grey50") +
+  geom_ribbon(data = paka$proj_ribbon,
+              aes(year, ymin = lo90, ymax = hi90, fill = method), alpha = 0.15) +
+  geom_ribbon(data = paka$proj_ribbon,
+              aes(year, ymin = lo50, ymax = hi50, fill = method), alpha = 0.30) +
+  geom_line(data = paka$proj_ribbon, aes(year, med, colour = method),
+            linewidth = 1) +
+  scale_fill_manual(values = pal_proj) +
+  scale_colour_manual(values = pal_proj) +
+  labs(x = "Year", y = "Spawning biomass", colour = "Method", fill = "Method") +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
 
 ```{r}
 #| echo: false
 #| label: fig-bet-cpue-fit
-#| fig-cap: "Observed, predicted, and simulated standardized CPUE for the fitted WCPO bigeye tuna diagnostic model, shown by index month. Vertical error bars show one fitted standard deviation on the log scale; grey lines show fitted-model simulations."
+#| fig-cap: "Observed, predicted, and simulated standardized CPUE for the fitted`opal` WCPO bigeye tuna diagnostic model (green), shown by index month. Vertical error bars show one fitted standard deviation on the log scale; grey lines show fitted-model simulations. Illustrative fits by MULTIFAN-CL (red) and SS3 (blue) models are also shown. The RMSE of the log-residuals is shown for each model and index month."
 #| fig-height: 4.5
 #| fig-width: 8
 
@@ -1168,18 +1272,77 @@ bet_cpue_sim <- bet$report$cpue_sim %>%
     simulated = exp(simulated_log)
   )
 
-ggplot(bet_cpue, aes(x = year)) +
+# load xmodel
+bet_xmodel_cpue <- readRDS(file.path("cached", "bet", "wcpo_bet_xmodel_cpue.rds"))
+
+# lookup table to translate ts -> year/month/index (same for all models)
+ts_lookup <- bet_cpue %>%
+  distinct(ts, year, month, index)
+
+xmodel_cpue_long <- bet_xmodel_cpue %>%
+  filter(id %in% c("mfcl-v11", "02-fix-sel")) %>%
+  mutate(model = recode(id, "mfcl-v11" = "MFCL", "02-fix-sel" = "SS3")) %>%
+  left_join(ts_lookup, by = c("Time" = "ts")) %>%
+  transmute(
+    year, month, index,
+    pred  = Exp,
+    value = Obs,
+    sigma = SE,
+    lower = exp(log(value) - sigma),
+    upper = exp(log(value) + sigma),
+    model
+  )
+
+bet_cpue$model <- "opal"
+
+bet_cpue_combined <- bind_rows(bet_cpue, xmodel_cpue_long)
+
+# calculate goodness-of-fit metrics for each model and index
+cpue_gof <- bet_cpue_combined %>%
+  mutate(log_resid = log(value) - log(pred)) %>%
+  group_by(index, model) %>%
+  summarise(
+    n     = n(),
+    rmse  = sqrt(mean(log_resid^2)),
+    .groups = "drop"
+  ) %>%
+  arrange(index, rmse) %>%
+  select(index, model, rmse) %>%
+  pivot_wider(names_from = model, values_from = rmse)
+
+# long-format RMSE labels for plotting (one row per index/model)
+cpue_gof_labels <- bet_cpue_combined %>%
+  mutate(log_resid = log(value) - log(pred)) %>%
+  group_by(index, model) %>%
+  summarise(rmse = sqrt(mean(log_resid^2)), .groups = "drop") %>%
+  mutate(label = paste0(model, ": ", sprintf("%.3f", rmse)))
+
+ggplot(bet_cpue_combined, aes(x = year)) +
   geom_line(data = bet_cpue_sim,
             aes(y = simulated, group = sim_id),
             colour = "grey45", alpha = 0.42, linewidth = 0.32) +
-  geom_line(aes(y = pred), colour = "red3", linewidth = 0.8) +
-  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.35,
+  geom_errorbar(data = filter(bet_cpue_combined, model == "opal"),
+                aes(ymin = lower, ymax = upper), width = 0.35,
                 colour = "grey20", alpha = 0.85, linewidth = 0.3) +
-  geom_point(aes(y = value), shape = 21, size = 1.25,
+  geom_point(data = filter(bet_cpue_combined, model == "opal"),
+             aes(y = value), shape = 21, size = 1.25,
              fill = "white", colour = "black", stroke = 0.25) +
+  geom_line(aes(y = pred, colour = model), linewidth = 0.8) +
+  geom_text(data = filter(cpue_gof_labels, model == "opal"),
+            aes(x = Inf, y = Inf, label = label, colour = model),
+            hjust = 1.1, vjust = 1.5, size = 3,
+            inherit.aes = FALSE, show.legend = FALSE) +
+  geom_text(data = filter(cpue_gof_labels, model == "SS3"),
+            aes(x = Inf, y = Inf, label = label, colour = model),
+            hjust = 1.1, vjust = 3.0, size = 3, 
+            inherit.aes = FALSE, show.legend = FALSE) +
+  geom_text(data = filter(cpue_gof_labels, model == "MFCL"),
+            aes(x = Inf, y = Inf, label = label, colour = model),
+            hjust = 1.1, vjust = 4.5, size = 3, 
+            inherit.aes = FALSE, show.legend = FALSE) +
   facet_wrap(~ index, scales = "free_y", ncol = 2) +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
-  labs(x = "Year", y = "Standardized CPUE") +
+  labs(x = "Year", y = "Standardized CPUE", colour = "Model") +
   theme_minimal()
 ```
 
@@ -1767,7 +1930,7 @@ ggplot(bet_selectivity_df, aes(x = length, y = selectivity)) +
 ```{r}
 #| echo: false
 #| label: fig-bet-biomass
-#| fig-cap: "Estimated spawning biomass and relative biomass trajectories for the fitted WCPO bigeye tuna diagnostic model. Shaded ribbons show approximate 95% intervals; report-level standard errors are used where finite, with a 10% CV display ribbon used where those standard errors are unavailable."
+#| fig-cap: "Estimated spawning biomass and relative biomass trajectories for the fitted WCPO bigeye tuna diagnostic model. Shaded ribbons show approximate 95% intervals; report-level standard errors are used where finite, with a 10% CV display ribbon used where those standard errors are unavailable. The `opal` model (green) is compared with the SS3 (blue) and MFCL (red) reference models."
 #| fig-height: 5
 #| fig-width: 8
 
@@ -1814,94 +1977,54 @@ bet_biomass <- bind_rows(
     )
   )
 
-ggplot(bet_biomass, aes(x = year, y = value)) +
+bet_biomass$model = "opal"
+
+# load ss3 and mfcl trajectories for comparison
+bet_xmodel <- readRDS(file.path("cached", "bet", "wcpo_bet_xmodel_biomass.rds"))
+
+xmodel_long <- bet_xmodel %>%
+  filter(model %in% c("MFCL-v11", "02-fix-sel")) %>%
+  mutate(model = recode(model, "MFCL-v11" = "MFCL", "02-fix-sel" = "SS3")) %>%
+  arrange(model, ts) %>%
+  group_by(model) %>%
+  mutate(sb0 = mean(ssb[1:4]),
+         static_depletion = ssb / sb0,
+         static_depletion_se = ssb_se / sb0) %>%
+  ungroup() %>%
+  pivot_longer(
+    cols = c(ssb, depletion, static_depletion),
+    names_to = "quantity_id",
+    values_to = "value"
+  ) %>%
+  mutate(
+    se = case_when(
+      quantity_id == "ssb"               ~ ssb_se,
+      quantity_id == "depletion"         ~ depletion_se,
+      quantity_id == "static_depletion"  ~ static_depletion_se
+    ),
+    quantity = case_when(
+      quantity_id == "ssb"               ~ "Spawning biomass (mt)",
+      quantity_id == "static_depletion"  ~ "SB/SB0",
+      quantity_id == "depletion"         ~ "SB/SB_F0"
+    ),
+    # MFCL is annual -> use year as-is; SS3 is quarterly -> add season fraction
+    year = if_else(model == "MFCL", year, year + (season - 1) / 4),
+    lower = pmax(0, value - 1.96 * se),
+    upper = value + 1.96 * se,
+    quantity = factor(quantity, levels = levels(bet_biomass$quantity))
+  ) %>%
+  select(year, quantity, value, lower, upper, model)
+
+bet_combined <- bind_rows(bet_biomass, xmodel_long) %>%
+  filter(year <= 2018)
+
+ggplot(bet_combined, aes(x = year, y = value, colour = model, fill = model)) +
   geom_ribbon(aes(ymin = lower, ymax = upper),
-              fill = "cyan4", alpha = 0.18, colour = NA) +
-  geom_line(colour = "cyan4", linewidth = 0.9) +
+              alpha = 0.18, colour = NA) +
+  geom_line(linewidth = 0.9) +
   facet_wrap(~ quantity, ncol = 1, scales = "free_y") +
-  labs(x = "Year", y = NULL) +
+  labs(x = "Year", y = NULL, colour = "Model", fill = "Model") +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
   theme_minimal()
-```
-
-```{r}
-#| echo: false
-#| label: fig-paka-lf-biomass
-#| fig-cap: "Estimated spawning-biomass trajectory for the 'opakapaka opal (with LF) model compared with the SS3 operating model (OM) and estimation model (EM), 1949--2023."
-#| fig-height: 4.5
-#| fig-width: 8
-
-ybmax_lf <- max(paka$ssb$estimate, paka$om$SSB, paka$em$SSB, na.rm = TRUE)
-
-ggplot() +
-  geom_line(data = paka$ssb,
-            aes(x = year, y = estimate, colour = "opal (with LF)"),
-            linewidth = 1) +
-  geom_line(data = paka$om,
-            aes(x = Yr, y = SSB, colour = "SS3 OM"), linewidth = 1) +
-  geom_line(data = paka$em,
-            aes(x = Yr, y = SSB, colour = "SS3 EM"), linewidth = 1) +
-  scale_colour_manual(values = c(
-    "opal (with LF)" = "cyan4",
-    "SS3 OM"         = "black",
-    "SS3 EM"         = "red"
-  )) +
-  labs(x = "Year", y = "Spawning biomass", colour = NULL) +
-  scale_y_continuous(limits = c(0, ybmax_lf * 1.2)) +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-```
-
-```{r}
-#| echo: false
-#| label: fig-paka-mcmc-trace
-#| fig-cap: "MCMC traces for the scalar parameters of the 'opakapaka opal (with LF) model --- unfished spawning biomass and the two CPUE catchabilities, on the log scale --- across eight chains (colours). Red dashed lines mark the MLE. Overlapping, stationary chains indicate good mixing."
-#| fig-height: 5
-#| fig-width: 8
-
-ggplot(paka$mcmc_trace, aes(iter, value, colour = chain)) +
-  geom_line(linewidth = 0.3, alpha = 0.7) +
-  geom_hline(data = paka$mcmc_mle_ref, aes(yintercept = mle),
-             linetype = "dashed", colour = "red", linewidth = 0.5) +
-  facet_wrap(~ param, scales = "free_y", ncol = 1) +
-  labs(x = "Post-warmup iteration", y = "Value", colour = "Chain") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
-```
-
-```{r}
-#| echo: false
-#| label: fig-paka-projection
-#| fig-cap: "'Opakapaka spawning biomass: historical uncertainty and a 10-year constant-catch projection (200 draws per method); the last 60 years are shown. Grey solid = estimated MLE; black dashed = SS3 operating model; red = SS3 estimation model. Coloured ribbons give the 50% (darker) and 90% (lighter) intervals for the MVN and MCMC approaches, and the orange line is the MCMC historical median. The vertical dashed line marks the end of the historical period (2024)."
-#| fig-height: 4.5
-#| fig-width: 8
-
-pal_proj <- c(MVN = "steelblue", MCMC = "darkorange")
-
-ggplot() +
-  geom_ribbon(data = paka$proj_hist_ribbon,
-              aes(year, ymin = lo90, ymax = hi90, fill = method), alpha = 0.12) +
-  geom_ribbon(data = paka$proj_hist_ribbon,
-              aes(year, ymin = lo50, ymax = hi50, fill = method), alpha = 0.25) +
-  geom_line(data = subset(paka$proj_hist_ribbon, method == "MCMC"),
-            aes(year, med, colour = method), linewidth = 0.75) +
-  geom_line(data = paka$proj_hist_mle, aes(year, sbio),
-            colour = "grey20", linewidth = 0.9) +
-  geom_line(data = paka$proj_om, aes(Yr, SSB),
-            colour = "black", linewidth = 0.8, linetype = "dashed") +
-  geom_line(data = paka$proj_em, aes(Yr, SSB),
-            colour = "red", linewidth = 0.8) +
-  geom_vline(xintercept = 2024, linetype = "dashed", colour = "grey50") +
-  geom_ribbon(data = paka$proj_ribbon,
-              aes(year, ymin = lo90, ymax = hi90, fill = method), alpha = 0.15) +
-  geom_ribbon(data = paka$proj_ribbon,
-              aes(year, ymin = lo50, ymax = hi50, fill = method), alpha = 0.30) +
-  geom_line(data = paka$proj_ribbon, aes(year, med, colour = method),
-            linewidth = 1) +
-  scale_fill_manual(values = pal_proj) +
-  scale_colour_manual(values = pal_proj) +
-  labs(x = "Year", y = "Spawning biomass", colour = "Method", fill = "Method") +
-  theme_minimal() +
-  theme(legend.position = "bottom")
 ```
 
