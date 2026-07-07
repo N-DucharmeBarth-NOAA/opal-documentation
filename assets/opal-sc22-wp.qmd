@@ -534,6 +534,20 @@ bet_harmonic_mean <- function(x) {
   if (!length(x)) return(NA_real_)
   length(x) / sum(1 / x)
 }
+bet_sdnr_summary <- function(x, conf = 0.95) {
+  x <- x[is.finite(x)]
+  df <- length(x) - 1L
+  est <- sd(x)
+  if (df < 1L) {
+    return(tibble(osa_sdnr = est, osa_sdnr_lci = NA_real_, osa_sdnr_hci = NA_real_))
+  }
+  alpha <- (1 - conf) / 2
+  tibble(
+    osa_sdnr = est,
+    osa_sdnr_lci = sqrt(df * est^2 / qchisq(1 - alpha, df)),
+    osa_sdnr_hci = sqrt(df * est^2 / qchisq(alpha, df))
+  )
+}
 bet_normalise_composition <- function(x) {
   total <- sum(x, na.rm = TRUE)
   if (!is.finite(total) || total <= 0) return(rep(NA_real_, length(x)))
@@ -550,13 +564,20 @@ bet_comp_residual_rows <- bind_rows(
 bet_comp_cell_summary <- bet_comp_residual_rows %>%
   filter(is.finite(residual)) %>%
   group_by(composition, Fishery, fishery_num) %>%
-  summarise(
-    n_cells = n(),
-    mean = mean(residual),
-    osa_sdnr = sd(residual),
-    mar = median(abs(residual)),
-    max_abs = max(abs(residual)),
-    .groups = "drop"
+  group_modify(~bind_cols(
+    tibble(
+      n_cells = nrow(.x),
+      mean = mean(.x$residual),
+      mar = median(abs(.x$residual)),
+      max_abs = max(abs(.x$residual))
+    ),
+    bet_sdnr_summary(.x$residual)
+  )) %>%
+  ungroup() %>%
+  select(
+    composition, Fishery, fishery_num,
+    n_cells,
+    mean, osa_sdnr, osa_sdnr_lci, osa_sdnr_hci, mar, max_abs
   )
 bet_comp_row_diagnostics <- bet_comp_residual_rows %>%
   group_by(composition, Fishery, fishery_num, row) %>%
@@ -966,7 +987,7 @@ knitr::kable(bet_cpue_sdnr_tbl, booktabs = TRUE, align = c("l", "r", "r", "r", "
 
 ```{r}
 #| label: tbl-bet-composition-sdnr
-#| tbl-cap: "Composition residual diagnostics by composition type and fishery for the fitted WCPO bigeye tuna diagnostic model. OSA SDNR is the standard deviation of finite bin-level OSA residuals returned by compResidual::resMulti(); Francis and McAllister-Ianelli columns follow the SBT composition-diagnostic summaries."
+#| tbl-cap: "Composition residual diagnostics by composition type and fishery for the fitted WCPO bigeye tuna diagnostic model. OSA SDNR is the standard deviation of finite bin-level OSA residuals returned by compResidual::resMulti(); the 95% interval uses the same chi-square SDNR interval as the SBT diagnostics. Francis and McAllister-Ianelli columns follow the SBT composition-diagnostic summaries."
 #| echo: false
 
 bet_comp_sdnr_tbl <- bet_comp_diagnostic_summary %>%
@@ -976,6 +997,7 @@ bet_comp_sdnr_tbl <- bet_comp_diagnostic_summary %>%
     Rows = n_rows,
     Cells = n_cells,
     `OSA SDNR` = round(osa_sdnr, 3),
+    `OSA 95% CI` = sprintf("%.3f-%.3f", osa_sdnr_lci, osa_sdnr_hci),
     MAR = round(mar, 3),
     `Francis SDNR` = round(francis_sdnr, 3),
     `N multiplier` = round(francis_n_multiplier, 2),
@@ -988,7 +1010,7 @@ bet_comp_sdnr_kable <- knitr::kable(
   bet_comp_sdnr_tbl,
   format = if (knitr::is_latex_output()) "latex" else "html",
   booktabs = TRUE,
-  align = c("l", "l", rep("r", 9))
+  align = c("l", "l", rep("r", 10))
 )
 if (knitr::is_latex_output()) {
   knitr::asis_output(paste0(
@@ -1388,12 +1410,14 @@ make_year_comp <- function(kind, fishery, nsim = 12L) {
   if (kind == "lf") {
     pred_list <- bet$report$lf_pred
     fishery_f <- bet$data$lf_fishery_f
+    n_eff_rows <- split(bet$data$lf_n, bet$data$lf_fishery)[[as.character(fishery)]]
     bins <- bet$data$len_mid
     obs <- bet$data$wcpo_bet_lf %>% filter(fishery == !!fishery)
     bin_col <- "length"
   } else {
     pred_list <- bet$report$wf_pred
     fishery_f <- bet$data$wf_fishery_f
+    n_eff_rows <- split(bet$data$wf_n, bet$data$wf_fishery)[[as.character(fishery)]]
     bins <- bet$data$wt_mid
     obs <- bet$data$wcpo_bet_wf %>% filter(fishery == !!fishery)
     bin_col <- "weight"
@@ -1407,6 +1431,11 @@ make_year_comp <- function(kind, fishery, nsim = 12L) {
   if (nrow(obs_rows) != nrow(pred)) {
     stop("Observed rows do not align with predicted composition rows")
   }
+  if (length(n_eff_rows) != nrow(pred)) {
+    stop("Effective N rows do not align with predicted composition rows")
+  }
+  obs_rows <- obs_rows %>%
+    mutate(effective_n = as.numeric(n_eff_rows))
 
   pred_year <- as.data.frame(pred) %>%
     setNames(as.character(bins)) %>%
@@ -1424,10 +1453,16 @@ make_year_comp <- function(kind, fishery, nsim = 12L) {
     ungroup() %>%
     rename(!!bin_col := bin)
 
+  effective_n <- obs_rows %>%
+    group_by(year) %>%
+    summarise(effective_n = sum(effective_n, na.rm = TRUE), .groups = "drop") %>%
+    mutate(label = sprintf("Neff = %.1f", effective_n))
+
   list(
     observed = obs_year,
     predicted = pred_year,
     simulated = simulate_year_composition(pred_year, obs_year, bin_col, nsim = nsim),
+    effective_n = effective_n,
     bin_col = bin_col
   )
 }
@@ -1436,7 +1471,7 @@ make_year_comp <- function(kind, fishery, nsim = 12L) {
 ```{r}
 #| echo: false
 #| label: fig-bet-lf12-year-composition
-#| fig-cap: "Year-specific observed, predicted, and simulated length-composition proportions for selected years of WCPO bigeye tuna fishery 12. Unlike Figure 3, this plot does not aggregate over all years; each panel has its own fitted and simulated composition."
+#| fig-cap: "Year-specific observed, predicted, and simulated length-composition proportions for selected years of WCPO bigeye tuna fishery 12. Unlike Figure 3, this plot does not aggregate over all years; each panel has its own fitted and simulated composition. Panel text gives the variance-adjusted effective N used by the likelihood for that year."
 #| fig-height: 7.2
 #| fig-width: 8
 
@@ -1454,6 +1489,10 @@ ggplot() +
             colour = "steelblue", alpha = 0.55, linewidth = 0.3) +
   geom_line(data = filter(bet_lf12_year$predicted, year %in% bet_lf12_panel_years),
             aes(x = length, y = proportion), colour = "red3", linewidth = 0.4) +
+  geom_text(data = filter(bet_lf12_year$effective_n, year %in% bet_lf12_panel_years),
+            aes(x = Inf, y = Inf, label = label),
+            inherit.aes = FALSE, hjust = 1.05, vjust = 1.3,
+            size = 2.1, colour = "grey25") +
   facet_wrap(~ year, ncol = 4, scales = "free_y") +
   labs(x = "Length (cm)", y = "Proportion") +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
@@ -1465,7 +1504,7 @@ ggplot() +
 ```{r}
 #| echo: false
 #| label: fig-bet-wf15-year-composition
-#| fig-cap: "Year-specific observed, predicted, and simulated weight-composition proportions for selected years of WCPO bigeye tuna fishery 15. Unlike Figure 4, this plot does not aggregate over all years; each panel has its own fitted and simulated composition."
+#| fig-cap: "Year-specific observed, predicted, and simulated weight-composition proportions for selected years of WCPO bigeye tuna fishery 15. Unlike Figure 4, this plot does not aggregate over all years; each panel has its own fitted and simulated composition. Panel text gives the variance-adjusted effective N used by the likelihood for that year."
 #| fig-height: 7.2
 #| fig-width: 8
 
@@ -1483,6 +1522,10 @@ ggplot() +
             colour = "steelblue", alpha = 0.52, linewidth = 0.28) +
   geom_line(data = filter(bet_wf15_year$predicted, year %in% bet_wf15_panel_years),
             aes(x = weight, y = proportion), colour = "red3", linewidth = 0.35) +
+  geom_text(data = filter(bet_wf15_year$effective_n, year %in% bet_wf15_panel_years),
+            aes(x = Inf, y = Inf, label = label),
+            inherit.aes = FALSE, hjust = 1.05, vjust = 1.3,
+            size = 2.1, colour = "grey25") +
   facet_wrap(~ year, ncol = 4, scales = "free_y") +
   labs(x = "Weight (kg)", y = "Proportion") +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
@@ -1628,12 +1671,12 @@ ggplot(bet_rec_df, aes(x = year, y = rdev)) +
   facet_wrap(~ season_label, ncol = 2) +
   scale_colour_manual(
     values = c(`FALSE` = "grey40", `TRUE` = "firebrick"),
-    labels = c(`FALSE` = "Fixed", `TRUE` = "Estimated")
+    labels = c(`FALSE` = "Fixed", `TRUE` = "Estimated"),
+    guide = "none"
   ) +
   scale_x_continuous(breaks = scales::breaks_pretty(n = 6)) +
-  labs(x = "Year", y = "Recruitment deviation", colour = NULL) +
-  theme_minimal() +
-  theme(legend.position = "bottom")
+  labs(x = "Year", y = "Recruitment deviation") +
+  theme_minimal()
 ```
 
 ```{r}
