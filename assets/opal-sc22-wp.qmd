@@ -56,6 +56,7 @@ format:
       - inline-code.lua
     header-includes: |
      \usepackage{draftwatermark}
+     \SetWatermarkLightness{0.92}
      \usepackage{pdflscape}
      \providecommand{\citeproc}[2]{#2}
   html:
@@ -493,6 +494,137 @@ if (is.na(bet_fit_path)) {
 bet <- readRDS(bet_fit_path)
 bet_final_sb_b0 <- tail(bet$report$spawning_biomass_y, 1) / bet$report$B0
 bet_final_dyn_dep <- tail(bet$report$dynamic_depletion_y, 1)
+bet_objective_components <- bet$diagnostics$objective_components
+if (is.null(bet_objective_components)) {
+  stop("BET objective components are not available in the cached results")
+}
+bet_objective_component_total <- sum(bet_objective_components)
+if (abs(bet_objective_component_total - bet$opt$objective) > 1e-6) {
+  stop("BET objective components do not sum to the optimizer objective")
+}
+format_duration <- function(seconds) {
+  if (is.null(seconds) || length(seconds) == 0 || !is.finite(seconds)) {
+    return("not recorded")
+  }
+  if (seconds < 90) {
+    paste0(round(seconds, 1), " s")
+  } else {
+    paste0(round(seconds / 60, 1), " min")
+  }
+}
+bet_mle_runtime_text <- format_duration(bet$diagnostics$mle_runtime_seconds)
+bet_mle_iterations <- if (is.null(bet$diagnostics$mle_runtime_iterations)) {
+  bet$opt$iterations
+} else {
+  bet$diagnostics$mle_runtime_iterations
+}
+bet_mle_function_evals <- if (is.null(bet$diagnostics$mle_runtime_evaluations)) {
+  bet$opt$evaluations[["function"]]
+} else {
+  bet$diagnostics$mle_runtime_evaluations[["function"]]
+}
+bet_mle_gradient_evals <- if (is.null(bet$diagnostics$mle_runtime_evaluations)) {
+  bet$opt$evaluations[["gradient"]]
+} else {
+  bet$diagnostics$mle_runtime_evaluations[["gradient"]]
+}
+
+bet_harmonic_mean <- function(x) {
+  x <- x[is.finite(x) & x > 0]
+  if (!length(x)) return(NA_real_)
+  length(x) / sum(1 / x)
+}
+bet_normalise_composition <- function(x) {
+  total <- sum(x, na.rm = TRUE)
+  if (!is.finite(total) || total <= 0) return(rep(NA_real_, length(x)))
+  x / total
+}
+bet_comp_residual_rows <- bind_rows(
+  bet$diagnostics$lf_residuals,
+  bet$diagnostics$wf_residuals
+) %>%
+  mutate(
+    fishery_num = as.integer(sub("Fishery ", "", Fishery)),
+    composition = factor(composition, levels = c("Length", "Weight"))
+  )
+bet_comp_cell_summary <- bet_comp_residual_rows %>%
+  filter(is.finite(residual)) %>%
+  group_by(composition, Fishery, fishery_num) %>%
+  summarise(
+    n_cells = n(),
+    mean = mean(residual),
+    osa_sdnr = sd(residual),
+    mar = median(abs(residual)),
+    max_abs = max(abs(residual)),
+    .groups = "drop"
+  )
+bet_comp_row_diagnostics <- bet_comp_residual_rows %>%
+  group_by(composition, Fishery, fishery_num, row) %>%
+  group_modify(~{
+    obs <- bet_normalise_composition(.x$observed)
+    pred <- bet_normalise_composition(.x$predicted)
+    bin <- .x$bin
+    n_eff <- .x$n_eff[1]
+    if (anyNA(obs) || anyNA(pred) || !is.finite(n_eff) || n_eff <= 0) {
+      return(tibble(
+        n_eff = n_eff,
+        mean_residual = NA_real_,
+        mi_eff_n = NA_real_
+      ))
+    }
+    obs_mean <- sum(obs * bin)
+    pred_mean <- sum(pred * bin)
+    var_mean <- (sum(pred * bin^2) - pred_mean^2) / n_eff
+    mean_residual <- if (is.finite(var_mean) && var_mean > 0) {
+      (obs_mean - pred_mean) / sqrt(var_mean)
+    } else {
+      NA_real_
+    }
+    denominator <- sum((obs - pred)^2)
+    numerator <- sum(pred * (1 - pred))
+    mi_eff_n <- if (is.finite(denominator) && denominator > 0) {
+      numerator / denominator
+    } else {
+      Inf
+    }
+    tibble(
+      n_eff = n_eff,
+      mean_residual = mean_residual,
+      mi_eff_n = mi_eff_n
+    )
+  }) %>%
+  ungroup()
+bet_comp_mean_summary <- bet_comp_row_diagnostics %>%
+  group_by(composition, Fishery, fishery_num) %>%
+  summarise(
+    n_rows = n(),
+    francis_sdnr = sd(mean_residual[is.finite(mean_residual)]),
+    francis_n_multiplier = ifelse(
+      is.finite(francis_sdnr) && francis_sdnr > 0,
+      1 / francis_sdnr^2,
+      NA_real_
+    ),
+    mean_input_n = mean(n_eff, na.rm = TRUE),
+    median_input_n = median(n_eff, na.rm = TRUE),
+    mi_harmonic_n = bet_harmonic_mean(mi_eff_n),
+    mi_median_n = median(mi_eff_n[is.finite(mi_eff_n)], na.rm = TRUE),
+    mi_over_mean_input_n = mi_harmonic_n / mean_input_n,
+    .groups = "drop"
+  )
+bet_comp_diagnostic_summary <- bet_comp_cell_summary %>%
+  left_join(
+    bet_comp_mean_summary,
+    by = c("composition", "Fishery", "fishery_num")
+  ) %>%
+  arrange(composition, fishery_num)
+bet_comp_residual_source <- bet$diagnostics$residual_source
+if (is.null(bet_comp_residual_source) || !length(bet_comp_residual_source)) {
+  bet_comp_residual_source <- "compResidual::resMulti"
+}
+bet_comp_mean_input_n_range <- range(
+  bet_comp_diagnostic_summary$mean_input_n,
+  na.rm = TRUE
+)
 ```
 
 
@@ -708,9 +840,11 @@ The first case study uses the data from a fleets-as-areas model described in the
 
 The current diagnostic configuration uses the quarterly standardized CPUE series as four seasonal indices, fits length compositions from fisheries 8--14, and fits weight compositions from fisheries 1, 2, 3, 4, 6, 7, and 15. Fishery 8 length compositions are retained but strongly downweighted, and weight-composition fishery 5 remains inactive after diagnostic runs failed to converge cleanly. Recruitment deviations are estimated across the model period, catchability is estimated separately by index, and selected selectivity parameters are estimated for the fisheries with active composition data. Growth, natural mortality, steepness, recruitment variability, effort creep, and the remaining selectivity parameters are fixed at the bundled reference values.
 
-The fit converged according to `nlminb`, with the constrained KKT-style gradient close to zero despite a larger raw maximum gradient caused by active bounds (@tbl-bet-fit-summary). The likelihood decomposition shows that the length-composition data dominate the objective in this configuration, while the CPUE component contributes the abundance trend information and the recruitment-deviation density regularizes annual departures from the stock-recruitment curve. The estimated unfished spawning biomass is approximately `r format(round(bet$report$B0), big.mark = ",")` mt, and the final-year relative spawning biomass is `r round(bet_final_sb_b0, 3)` when scaled by $B_0$ (@tbl-bet-depletion). The dynamic depletion ratio is slightly higher (`r round(bet_final_dyn_dep, 3)`) because it uses the time-varying unfished spawning biomass denominator rather than the static $B_0$ denominator.
+The fit converged according to `nlminb`, with the constrained KKT-style gradient close to zero despite a larger raw maximum gradient caused by active bounds (@tbl-bet-fit-summary). Fitting this diagnostic configuration from the configured starting values to the maximum-likelihood estimate took `r bet_mle_runtime_text` on the workstation used to build this document, requiring `r bet_mle_iterations` optimizer iterations, `r bet_mle_function_evals` function evaluations, and `r bet_mle_gradient_evals` gradient evaluations. The additive objective decomposition is dominated numerically by the composition likelihoods, especially the weight-composition component, while the CPUE component contributes the abundance trend information and the recruitment-deviation density regularizes annual departures from the stock-recruitment curve. The estimated unfished spawning biomass is approximately `r format(round(bet$report$B0), big.mark = ",")` mt, and the final-year relative spawning biomass is `r round(bet_final_sb_b0, 3)` when scaled by $SB_0$ (@tbl-bet-depletion). The dynamic depletion ratio is slightly higher (`r round(bet_final_dyn_dep, 3)`) because it uses the time-varying unfished spawning biomass denominator rather than the static $SB_0$ denominator.
 
-Diagnostic plots in the `opal` BET vignette compare observed and predicted CPUE by seasonal index, observed and predicted length and weight compositions, fitted recruitment deviations, and estimated selectivity-at-length and selectivity-at-age curves. The CPUE fit in @fig-bet-cpue-fit tracks the broad decline in standardized abundance from the early 1950s through the low-abundance period in the 2000s, while allowing the four quarterly indices to retain their own scale and observation uncertainty; simulated CPUE series from the fitted model show the amount of variation expected under the fitted lognormal observation model. The CPUE OSA residuals in @fig-bet-osa-residuals are centred close to zero and fall within approximately $\pm 2$ residual units, with SDNRs below one for each index month (@tbl-bet-cpue-sdnr). These residuals use the randomized quantile-residual logic underlying OSA diagnostics for latent-variable models, so approximate standard-normal behaviour is expected when the observation model is adequate [@dunn_randomized_1996; @thygesen_validation_2017]. The mean length- and weight-composition diagnostics in @fig-bet-lf-diagnostics and @fig-bet-wf-diagnostics include fitted predictions and simulated replicate lines for the active composition fisheries. The LF and WF composition residual diagnostics in @fig-bet-lf-composition-residuals, @fig-bet-wf-composition-residuals, and @fig-bet-composition-residual-qq use `compResidual::resMulti()` row-by-row for the active multinomial composition likelihoods and are summarised in @tbl-bet-composition-sdnr. The biomass and depletion trajectories in @fig-bet-biomass show the long-term decline in spawning biomass relative to unfished conditions and the partial separation between $SB/B_0$ and dynamic depletion. As with the 'opakapaka example, these results are intended to demonstrate the end-to-end workflow rather than to replace a full production assessment model.
+Diagnostic plots in the `opal` BET vignette compare observed and predicted CPUE by seasonal index, observed and predicted length and weight compositions, fitted recruitment deviations, and estimated selectivity-at-length and selectivity-at-age curves. The CPUE fit in @fig-bet-cpue-fit tracks the broad decline in standardized abundance from the early 1950s through the low-abundance period in the 2000s, while allowing the four quarterly indices to retain their own scale and observation uncertainty; simulated CPUE series from the fitted model show the amount of variation expected under the fitted lognormal observation model. The CPUE OSA residuals in @fig-bet-osa-residuals are centred close to zero and fall within approximately $\pm 2$ residual units, with SDNRs below one for each index month (@tbl-bet-cpue-sdnr). These residuals use the randomized quantile-residual logic underlying OSA diagnostics for latent-variable models, so approximate standard-normal behaviour is expected when the observation model is adequate [@dunn_randomized_1996; @thygesen_validation_2017]. The mean length- and weight-composition diagnostics in @fig-bet-lf-diagnostics and @fig-bet-wf-diagnostics aggregate observations, predictions, and simulations over all years for each active composition fishery; the simulated lines are generated on the same mean-composition scale as the red fitted line, so their average is centred on the fitted composition. To show the unaggregated temporal structure, @fig-bet-lf12-year-composition and @fig-bet-wf15-year-composition give year-specific examples for length-composition fishery 12 and weight-composition fishery 15. Example LF and WF composition OSA residual diagnostics are shown for fishery 12 and fishery 15 in @fig-bet-lf-composition-residuals and @fig-bet-wf-composition-residuals; these two panels are examples rather than the full residual set. The by-fishery Q-Q diagnostics in @fig-bet-composition-residual-qq summarise all active composition residuals. Following the SBT diagnostic summaries, @tbl-bet-composition-sdnr separates the bin-level OSA residual SDNR from the Francis mean-composition SDNR and McAllister-Ianelli effective-sample-size diagnostics. The OSA residuals are generated with `r bet_comp_residual_source` for the active multinomial composition likelihoods, and the near-one bin-level SDNRs are conditional on the variance-adjusted input sample sizes used in the likelihood; the mean input $N$ by fishery ranges from `r signif(bet_comp_mean_input_n_range[1], 3)` to `r signif(bet_comp_mean_input_n_range[2], 3)` after downweighting.
+
+The selectivity diagnostics in @tbl-bet-selectivity-issues and @fig-bet-selectivity-length show where the fitted `opal` selectivity curves differ from the SS3 reference curves and where estimated terms are constrained by bounds. Most flagged issues are bound-related rather than unconstrained interior failures, which is consistent with the small KKT-style gradient in @tbl-bet-fit-summary despite the larger raw maximum gradient. The recruitment deviations in @fig-bet-recruitment-deviations show the seasonal pattern of estimated process variation. The biomass and depletion trajectories in @fig-bet-biomass show the long-term decline in spawning biomass relative to unfished conditions and the partial separation between $SB/SB_0$ and dynamic depletion. As with the 'opakapaka example, these results are intended to demonstrate the end-to-end workflow rather than to replace a full production assessment model.
 
 ## Hawai'i 'Opakapaka {#sec-case-paka}
 
@@ -756,8 +890,12 @@ Generative AI tools were used to assist with code development, refactoring, and 
 
 ```{r}
 #| label: tbl-bet-fit-summary
-#| tbl-cap: "Optimization and likelihood-component summary for the fitted WCPO bigeye tuna diagnostic model."
+#| tbl-cap: "Optimization and objective-component summary for the fitted WCPO bigeye tuna diagnostic model. The Max KKT gradient is the maximum projected gradient after accounting for active parameter bounds. Objective components were computed as AD-objective switch increments at the fitted parameter vector and sum to the optimizer objective."
 #| echo: false
+
+format_bet_value <- function(x, digits = 2) {
+  format(round(x, digits), big.mark = ",", nsmall = digits)
+}
 
 bet_fit_tbl <- data.frame(
   Metric = c(
@@ -767,24 +905,26 @@ bet_fit_tbl <- data.frame(
     "Max KKT gradient",
     "B0",
     "Prior contribution",
-    "Harvest penalty",
     "Recruitment-deviation contribution",
     "CPUE contribution",
     "Length-composition contribution",
-    "Weight-composition contribution"
+    "Weight-composition contribution",
+    "Harvest penalty",
+    "Objective-component total"
   ),
   Value = c(
     bet$opt$convergence,
-    format(round(bet$opt$objective, 2), big.mark = ","),
+    format_bet_value(bet$opt$objective),
     round(bet$raw_grad, 4),
     round(bet$kkt_grad, 4),
     format(round(bet$report$B0), big.mark = ","),
-    round(bet$report$lp_prior, 2),
-    round(bet$report$lp_penalty, 3),
-    round(bet$report$lp_rec, 2),
-    round(sum(bet$report$lp_cpue), 2),
-    format(round(sum(bet$report$lp_lf), 2), big.mark = ","),
-    round(sum(bet$report$lp_wf), 2)
+    format_bet_value(bet_objective_components["Prior contribution"]),
+    format_bet_value(bet_objective_components["Recruitment-deviation contribution"]),
+    format_bet_value(bet_objective_components["CPUE contribution"]),
+    format_bet_value(bet_objective_components["Length-composition contribution"]),
+    format_bet_value(bet_objective_components["Weight-composition contribution"]),
+    format_bet_value(bet_objective_components["Harvest penalty"]),
+    format_bet_value(bet_objective_component_total)
   ),
   check.names = FALSE
 )
@@ -798,7 +938,7 @@ knitr::kable(bet_fit_tbl, booktabs = TRUE, align = c("l", "l"))
 #| echo: false
 
 bet_depletion_tbl <- data.frame(
-  Metric = c("SB/B0", "SB/SB_F0"),
+  Metric = c("SB/SB0", "SB/SB_F0"),
   Value = round(c(bet_final_sb_b0, bet_final_dyn_dep), 3),
   check.names = FALSE
 )
@@ -826,24 +966,100 @@ knitr::kable(bet_cpue_sdnr_tbl, booktabs = TRUE, align = c("l", "r", "r", "r", "
 
 ```{r}
 #| label: tbl-bet-composition-sdnr
-#| tbl-cap: "Composition OSA residual diagnostics by composition type and fishery for the fitted WCPO bigeye tuna diagnostic model."
+#| tbl-cap: "Composition residual diagnostics by composition type and fishery for the fitted WCPO bigeye tuna diagnostic model. OSA SDNR is the standard deviation of finite bin-level OSA residuals returned by compResidual::resMulti(); Francis and McAllister-Ianelli columns follow the SBT composition-diagnostic summaries."
 #| echo: false
 
-bet_comp_sdnr_tbl <- bet$diagnostics$composition_sdnr %>%
+bet_comp_sdnr_tbl <- bet_comp_diagnostic_summary %>%
   transmute(
     Composition = composition,
     Fishery,
-    n,
-    Mean = signif(mean, 4),
-    SDNR = signif(SDNR, 4),
-    MAR = signif(MAR, 4),
-    `Max |residual|` = signif(max_abs, 4)
+    Rows = n_rows,
+    Cells = n_cells,
+    `OSA SDNR` = round(osa_sdnr, 3),
+    MAR = round(mar, 3),
+    `Francis SDNR` = round(francis_sdnr, 3),
+    `N multiplier` = round(francis_n_multiplier, 2),
+    `Mean input N` = round(mean_input_n, 2),
+    `MI harmonic N` = round(mi_harmonic_n, 1),
+    `MI/input N` = round(mi_over_mean_input_n, 2)
   )
 
-knitr::kable(
+bet_comp_sdnr_kable <- knitr::kable(
   bet_comp_sdnr_tbl,
+  format = if (knitr::is_latex_output()) "latex" else "html",
   booktabs = TRUE,
-  align = c("l", "l", "r", "r", "r", "r", "r")
+  align = c("l", "l", rep("r", 9))
+)
+if (knitr::is_latex_output()) {
+  knitr::asis_output(paste0(
+    "\\begingroup\\scriptsize\\setlength{\\tabcolsep}{3pt}\n",
+    bet_comp_sdnr_kable,
+    "\n\\endgroup"
+  ))
+} else {
+  bet_comp_sdnr_kable
+}
+```
+
+```{r}
+#| label: tbl-bet-selectivity-issues
+#| tbl-cap: "Selectivity-parameter diagnostics by fishery for the fitted WCPO bigeye tuna diagnostic model. Flags identify estimated selectivity terms that are on parameter bounds; these bound checks help explain large raw gradients when the constrained KKT gradient is small."
+#| echo: false
+
+bet_sel_raw <- bet$diagnostics$selectivity_raw
+sel_short_component <- c(
+  "peak", "top", "asc. width", "desc. width", "initial sel.", "final sel."
+)
+bet_sel_map <- bet_sel_raw$map_sel
+bet_sel_pos <- which(names(bet_sel_raw$opt_par) == "par_sel")
+bet_sel_level_pos <- setNames(bet_sel_pos, as.character(seq_along(bet_sel_pos)))
+
+bet_sel_diag <- map_dfr(seq_len(nrow(bet_sel_map)), function(f) {
+  map_dfr(seq_len(ncol(bet_sel_map)), function(p) {
+    level <- as.character(bet_sel_map[f, p])
+    if (is.na(level)) return(tibble())
+    idx <- bet_sel_level_pos[[level]]
+    estimate <- bet_sel_raw$opt_par[idx]
+    lower <- bet_sel_raw$bounds$lower[idx]
+    upper <- bet_sel_raw$bounds$upper[idx]
+    bound_status <- case_when(
+      is.finite(lower) && estimate <= lower + 1e-7 ~ "lower",
+      is.finite(upper) && estimate >= upper - 1e-7 ~ "upper",
+      TRUE ~ "free"
+    )
+    tibble(
+      fishery = f,
+      Form = if_else(bet_sel_raw$sel_type_f[f] == 1L, "logistic", "double-normal"),
+      term = sel_short_component[p],
+      bound_status = bound_status
+    )
+  })
+})
+
+bet_selectivity_issues_tbl <- map_dfr(
+  sort(as.integer(names(bet_sel_raw$sel_specs))),
+  function(f) {
+    flags <- bet_sel_diag %>%
+      filter(fishery == f, bound_status != "free")
+    tibble(
+      Fishery = f,
+      Form = unique(bet_sel_diag$Form[bet_sel_diag$fishery == f]),
+      `Estimated terms` = paste(sel_short_component[bet_sel_raw$sel_specs[[as.character(f)]]],
+                                collapse = ", "),
+      `Flagged selectivity issue(s)` = if (nrow(flags) == 0L) {
+        "None flagged"
+      } else {
+        paste(paste0(flags$term, " at ", flags$bound_status, " bound"),
+              collapse = "; ")
+      }
+    )
+  }
+)
+
+knitr::kable(
+  bet_selectivity_issues_tbl,
+  booktabs = TRUE,
+  align = c("r", "l", "l", "l")
 )
 ```
 
@@ -907,7 +1123,7 @@ knitr::kable(
 ```{r}
 #| echo: false
 #| label: fig-bet-cpue-fit
-#| fig-cap: "Observed, predicted, and simulated standardized CPUE for the fitted WCPO bigeye tuna diagnostic model, shown by index month. Vertical ranges show one fitted standard deviation on the log scale; grey lines show fitted-model simulations."
+#| fig-cap: "Observed, predicted, and simulated standardized CPUE for the fitted WCPO bigeye tuna diagnostic model, shown by index month. Vertical error bars show one fitted standard deviation on the log scale; grey lines show fitted-model simulations."
 #| fig-height: 4.5
 #| fig-width: 8
 
@@ -933,11 +1149,12 @@ bet_cpue_sim <- bet$report$cpue_sim %>%
 ggplot(bet_cpue, aes(x = year)) +
   geom_line(data = bet_cpue_sim,
             aes(y = simulated, group = sim_id),
-            colour = "grey70", alpha = 0.5, linewidth = 0.3) +
-  geom_linerange(aes(ymin = lower, ymax = upper), colour = "grey60",
-                 alpha = 0.65) +
-  geom_point(aes(y = value), size = 1.1, colour = "black") +
+            colour = "grey45", alpha = 0.42, linewidth = 0.32) +
   geom_line(aes(y = pred), colour = "red3", linewidth = 0.8) +
+  geom_errorbar(aes(ymin = lower, ymax = upper), width = 0.35,
+                colour = "grey20", alpha = 0.85, linewidth = 0.3) +
+  geom_point(aes(y = value), shape = 21, size = 1.25,
+             fill = "white", colour = "black", stroke = 0.25) +
   facet_wrap(~ index, scales = "free_y", ncol = 2) +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
   labs(x = "Year", y = "Standardized CPUE") +
@@ -991,7 +1208,7 @@ ggplot(bind_rows(bet_osa_qq, bet_osa_time), aes(x = x, y = y)) +
 ```{r}
 #| echo: false
 #| label: fig-bet-lf-diagnostics
-#| fig-cap: "Mean observed length-composition proportions for WCPO bigeye tuna fisheries 8-14, with fitted predictions and simulated replicate lines shown for the fisheries included in the diagnostic length-composition likelihood."
+#| fig-cap: "Mean observed length-composition proportions for WCPO bigeye tuna fisheries 8-14, aggregated over all years, with fitted predictions and simulated replicate lines shown for the fisheries included in the diagnostic length-composition likelihood."
 #| fig-height: 7
 #| fig-width: 8
 
@@ -1063,7 +1280,7 @@ ggplot() +
 ```{r}
 #| echo: false
 #| label: fig-bet-wf-diagnostics
-#| fig-cap: "Mean observed, predicted, and simulated weight-composition proportions for active WCPO bigeye tuna weight-composition fisheries."
+#| fig-cap: "Mean observed, predicted, and simulated weight-composition proportions for active WCPO bigeye tuna weight-composition fisheries, aggregated over all years."
 #| fig-height: 7
 #| fig-width: 8
 
@@ -1136,6 +1353,147 @@ ggplot() +
 ```{r}
 #| echo: false
 #| include: false
+#| label: prep-bet-year-composition
+
+select_panel_years <- function(years, max_years) {
+  years <- sort(unique(years))
+  if (length(years) <= max_years) return(years)
+  years[unique(round(seq(1, length(years), length.out = max_years)))]
+}
+
+simulate_year_composition <- function(pred_year, obs_year, bin_col, nsim = 12L) {
+  years <- sort(unique(pred_year$year))
+  map_dfr(seq_len(nsim), function(s) {
+    map_dfr(years, function(y) {
+      pdat <- pred_year %>% filter(year == y) %>% arrange(.data[[bin_col]])
+      p <- pdat$proportion
+      p[!is.finite(p) | p < 0] <- 0
+      p <- if (sum(p) > 0) p / sum(p) else rep(1 / length(p), length(p))
+      n_eff <- obs_year %>%
+        filter(year == y) %>%
+        summarise(n = sum(value, na.rm = TRUE), .groups = "drop") %>%
+        pull(n)
+      n_eff <- max(50L, as.integer(round(n_eff)))
+      tibble(
+        year = y,
+        !!bin_col := pdat[[bin_col]],
+        proportion = as.numeric(rmultinom(1L, size = n_eff, prob = p)) / n_eff,
+        sim_id = s
+      )
+    })
+  })
+}
+
+make_year_comp <- function(kind, fishery, nsim = 12L) {
+  if (kind == "lf") {
+    pred_list <- bet$report$lf_pred
+    fishery_f <- bet$data$lf_fishery_f
+    bins <- bet$data$len_mid
+    obs <- bet$data$wcpo_bet_lf %>% filter(fishery == !!fishery)
+    bin_col <- "length"
+  } else {
+    pred_list <- bet$report$wf_pred
+    fishery_f <- bet$data$wf_fishery_f
+    bins <- bet$data$wt_mid
+    obs <- bet$data$wcpo_bet_wf %>% filter(fishery == !!fishery)
+    bin_col <- "weight"
+  }
+
+  i <- which(fishery_f == fishery)
+  pred <- as.matrix(pred_list[[i]])
+  obs_rows <- obs %>%
+    distinct(year, month, ts) %>%
+    arrange(ts, year, month)
+  if (nrow(obs_rows) != nrow(pred)) {
+    stop("Observed rows do not align with predicted composition rows")
+  }
+
+  pred_year <- as.data.frame(pred) %>%
+    setNames(as.character(bins)) %>%
+    mutate(year = obs_rows$year) %>%
+    pivot_longer(-year, names_to = bin_col, values_to = "proportion") %>%
+    mutate(!!bin_col := as.numeric(.data[[bin_col]])) %>%
+    group_by(year, .data[[bin_col]]) %>%
+    summarise(proportion = mean(proportion, na.rm = TRUE), .groups = "drop")
+
+  obs_year <- obs %>%
+    group_by(year, bin) %>%
+    summarise(value = sum(value, na.rm = TRUE), .groups = "drop") %>%
+    group_by(year) %>%
+    mutate(proportion = value / sum(value, na.rm = TRUE)) %>%
+    ungroup() %>%
+    rename(!!bin_col := bin)
+
+  list(
+    observed = obs_year,
+    predicted = pred_year,
+    simulated = simulate_year_composition(pred_year, obs_year, bin_col, nsim = nsim),
+    bin_col = bin_col
+  )
+}
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-lf12-year-composition
+#| fig-cap: "Year-specific observed, predicted, and simulated length-composition proportions for selected years of WCPO bigeye tuna fishery 12. Unlike Figure 3, this plot does not aggregate over all years; each panel has its own fitted and simulated composition."
+#| fig-height: 7.2
+#| fig-width: 8
+
+set.seed(12012)
+bet_lf12_year <- make_year_comp("lf", 12, nsim = 12L)
+bet_lf12_panel_years <- select_panel_years(bet_lf12_year$predicted$year, 16L)
+
+ggplot() +
+  geom_col(data = filter(bet_lf12_year$observed, year %in% bet_lf12_panel_years),
+           aes(x = length, y = proportion), fill = "grey75", width = 1.8) +
+  geom_line(data = filter(bet_lf12_year$predicted, year %in% bet_lf12_panel_years),
+            aes(x = length, y = proportion), colour = "red3", linewidth = 0.55) +
+  geom_line(data = filter(bet_lf12_year$simulated, year %in% bet_lf12_panel_years),
+            aes(x = length, y = proportion, group = sim_id),
+            colour = "steelblue", alpha = 0.55, linewidth = 0.3) +
+  geom_line(data = filter(bet_lf12_year$predicted, year %in% bet_lf12_panel_years),
+            aes(x = length, y = proportion), colour = "red3", linewidth = 0.4) +
+  facet_wrap(~ year, ncol = 4, scales = "free_y") +
+  labs(x = "Length (cm)", y = "Proportion") +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  theme_minimal() +
+  theme(strip.text = element_text(size = 7),
+        axis.text = element_text(size = 6))
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-wf15-year-composition
+#| fig-cap: "Year-specific observed, predicted, and simulated weight-composition proportions for selected years of WCPO bigeye tuna fishery 15. Unlike Figure 4, this plot does not aggregate over all years; each panel has its own fitted and simulated composition."
+#| fig-height: 7.2
+#| fig-width: 8
+
+set.seed(15015)
+bet_wf15_year <- make_year_comp("wf", 15, nsim = 12L)
+bet_wf15_panel_years <- select_panel_years(bet_wf15_year$predicted$year, 20L)
+
+ggplot() +
+  geom_col(data = filter(bet_wf15_year$observed, year %in% bet_wf15_panel_years),
+           aes(x = weight, y = proportion), fill = "grey75", width = 1.8) +
+  geom_line(data = filter(bet_wf15_year$predicted, year %in% bet_wf15_panel_years),
+            aes(x = weight, y = proportion), colour = "red3", linewidth = 0.5) +
+  geom_line(data = filter(bet_wf15_year$simulated, year %in% bet_wf15_panel_years),
+            aes(x = weight, y = proportion, group = sim_id),
+            colour = "steelblue", alpha = 0.52, linewidth = 0.28) +
+  geom_line(data = filter(bet_wf15_year$predicted, year %in% bet_wf15_panel_years),
+            aes(x = weight, y = proportion), colour = "red3", linewidth = 0.35) +
+  facet_wrap(~ year, ncol = 4, scales = "free_y") +
+  labs(x = "Weight (kg)", y = "Proportion") +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  theme_minimal() +
+  theme(strip.text = element_text(size = 7),
+        axis.text = element_text(size = 6))
+```
+
+```{r}
+#| echo: false
+#| include: false
 #| label: prep-bet-composition-residuals
 
 bet_lf_residuals <- bet$diagnostics$lf_residuals %>%
@@ -1167,15 +1525,20 @@ bet_comp_residuals <- bind_rows(bet_lf_residuals, bet_wf_residuals) %>%
   )
 
 plot_bet_comp_residuals <- function(plot_data, y_label) {
-  ggplot(
-    plot_data,
-    aes(x = year, y = bin, size = pmin(abs(residual), 4), fill = sign)
-  ) +
-    geom_point(shape = 21, alpha = 0.45, colour = "grey25", stroke = 0.08) +
+  plot_summary <- plot_data %>%
+    group_by(Fishery, year, bin) %>%
+    summarise(residual = mean(residual, na.rm = TRUE), .groups = "drop") %>%
+    mutate(residual = pmax(pmin(residual, 4), -4))
+
+  ggplot(plot_summary, aes(x = year, y = bin, fill = residual)) +
+    geom_raster(interpolate = FALSE) +
     facet_wrap(~ Fishery, ncol = 2, scales = "free_y") +
-    scale_fill_manual(values = c("Positive" = "#d73027", "Negative" = "#4575b4")) +
-    scale_size_continuous(range = c(0.2, 3.2), name = "|Residual|") +
-    labs(x = "Year", y = y_label, fill = "Residual sign") +
+    scale_fill_gradient2(
+      low = "#4575b4", mid = "white", high = "#d73027",
+      midpoint = 0, limits = c(-4, 4), oob = scales::squish,
+      name = "Mean OSA residual"
+    ) +
+    labs(x = "Year", y = y_label) +
     theme_minimal() +
     theme(legend.position = "bottom")
 }
@@ -1184,12 +1547,12 @@ plot_bet_comp_residuals <- function(plot_data, y_label) {
 ```{r}
 #| echo: false
 #| label: fig-bet-lf-composition-residuals
-#| fig-cap: "Length-composition OSA residual diagnostics for the fitted WCPO bigeye tuna diagnostic model. Point size is proportional to absolute residual magnitude; red and blue points indicate positive and negative residuals, respectively."
-#| fig-height: 8.5
+#| fig-cap: "Length-composition OSA residual diagnostics for fishery 12 in the fitted WCPO bigeye tuna diagnostic model. Colours show the mean OSA residual in each year-length cell, with blue indicating negative residuals and red indicating positive residuals."
+#| fig-height: 4.8
 #| fig-width: 8
 
 plot_bet_comp_residuals(
-  filter(bet_comp_residuals, type == "Length composition"),
+  filter(bet_comp_residuals, type == "Length composition", Fishery == "Fishery 12"),
   y_label = "Length (cm)"
 )
 ```
@@ -1197,12 +1560,12 @@ plot_bet_comp_residuals(
 ```{r}
 #| echo: false
 #| label: fig-bet-wf-composition-residuals
-#| fig-cap: "Weight-composition OSA residual diagnostics for the fitted WCPO bigeye tuna diagnostic model. Point size is proportional to absolute residual magnitude; red and blue points indicate positive and negative residuals, respectively."
-#| fig-height: 8.5
+#| fig-cap: "Weight-composition OSA residual diagnostics for fishery 15 in the fitted WCPO bigeye tuna diagnostic model. Colours show the mean OSA residual in each year-weight cell, with blue indicating negative residuals and red indicating positive residuals."
+#| fig-height: 4.8
 #| fig-width: 8
 
 plot_bet_comp_residuals(
-  filter(bet_comp_residuals, type == "Weight composition"),
+  filter(bet_comp_residuals, type == "Weight composition", Fishery == "Fishery 15"),
   y_label = "Weight (kg)"
 )
 ```
@@ -1210,49 +1573,196 @@ plot_bet_comp_residuals(
 ```{r}
 #| echo: false
 #| label: fig-bet-composition-residual-qq
-#| fig-cap: "Normal Q-Q diagnostics for length- and weight-composition OSA residuals in the fitted WCPO bigeye tuna diagnostic model."
-#| fig-height: 4
+#| fig-cap: "Normal Q-Q diagnostics for length- and weight-composition OSA residuals in the fitted WCPO bigeye tuna diagnostic model, shown separately by composition type and fishery."
+#| fig-height: 8
 #| fig-width: 8
 
-ggplot(bet_comp_residuals, aes(sample = residual)) +
+bet_comp_qq <- bet_comp_residuals %>%
+  mutate(
+    fishery_number = as.integer(sub("Fishery ", "", as.character(Fishery))),
+    panel = paste(type, Fishery, sep = "\n")
+  ) %>%
+  arrange(type, fishery_number) %>%
+  mutate(panel = factor(panel, levels = unique(panel)))
+
+ggplot(bet_comp_qq, aes(sample = residual)) +
   stat_qq(size = 0.45, alpha = 0.45) +
   stat_qq_line(colour = "red3", linetype = "dashed") +
-  facet_wrap(~ type, ncol = 2, scales = "free") +
+  facet_wrap(~ panel, ncol = 4, scales = "free") +
   labs(x = "Theoretical quantiles", y = "Sample quantiles") +
   theme_minimal()
 ```
 
 ```{r}
 #| echo: false
-#| label: fig-bet-biomass
-#| fig-cap: "Estimated spawning biomass and relative biomass trajectories for the fitted WCPO bigeye tuna diagnostic model."
+#| label: fig-bet-recruitment-deviations
+#| fig-cap: "Estimated recruitment deviations for the fitted WCPO bigeye tuna diagnostic model, shown by seasonal index month."
 #| fig-height: 5
 #| fig-width: 8
 
-bet_year <- bet$data$cpue_data$year + (bet$data$cpue_data$month - 1) / 12
-if (length(bet_year) != length(bet$report$spawning_biomass_y)) {
-  bet_year <- min(bet$data$cpue_data$year, na.rm = TRUE) +
-    (seq_along(bet$report$spawning_biomass_y) - 1) / 4
+bet_rec_raw <- bet$diagnostics$recruitment_raw
+bet_rec_lookup <- bet_rec_raw$cpue_lookup %>%
+  arrange(ts)
+bet_rec_months <- sort(unique(bet_rec_lookup$month))
+bet_rec_season_lookup <- tibble(
+  month = bet_rec_months,
+  season = seq_along(bet_rec_months),
+  season_label = paste0(month.name[month])
+)
+bet_rec_df <- bet_rec_lookup %>%
+  left_join(bet_rec_season_lookup, by = "month") %>%
+  mutate(
+    rdev = bet_rec_raw$rdev_y,
+    estimated = if (length(bet_rec_raw$map_rdev) == length(bet_rec_raw$rdev_y)) {
+      !is.na(bet_rec_raw$map_rdev)
+    } else {
+      TRUE
+    },
+    season_label = factor(season_label, levels = month.name[bet_rec_months])
+  )
+
+ggplot(bet_rec_df, aes(x = year, y = rdev)) +
+  geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey40") +
+  geom_line(colour = "grey35", linewidth = 0.45) +
+  geom_point(aes(colour = estimated), size = 1.1) +
+  facet_wrap(~ season_label, ncol = 2) +
+  scale_colour_manual(
+    values = c(`FALSE` = "grey40", `TRUE` = "firebrick"),
+    labels = c(`FALSE` = "Fixed", `TRUE` = "Estimated")
+  ) +
+  scale_x_continuous(breaks = scales::breaks_pretty(n = 6)) +
+  labs(x = "Year", y = "Recruitment deviation", colour = NULL) +
+  theme_minimal() +
+  theme(legend.position = "bottom")
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-selectivity-length
+#| fig-cap: "Selectivity-at-length curves for WCPO bigeye tuna fisheries. Blue lines show the fitted opal selectivity curves; dashed black lines show the SS3 reference selectivity curves used to initialise the diagnostic model."
+#| fig-height: 8
+#| fig-width: 8
+
+sel_logistic_plain <- function(len, par) {
+  mu <- mean(len)
+  sd_len <- sd(len)
+  a50 <- mu + par[1] * sd_len
+  w95 <- exp(par[2]) * sd_len
+  1 / (1 + exp(-log(19) * (len - a50) / w95))
+}
+
+sel_double_normal_plain <- function(len, par) {
+  mu <- mean(len)
+  sd_len <- sd(len)
+  peak <- mu + par[1] * sd_len
+  upselex <- exp(par[3]) * sd_len^2
+  downselex <- exp(par[4]) * sd_len^2
+  point1 <- 1 / (1 + exp(-par[5]))
+  point2 <- 1 / (1 + exp(-par[6]))
+  j2 <- length(len)
+  bin_width <- len[2] - len[1]
+  peak2 <- peak + bin_width + (0.99 * len[j2] - peak - bin_width) /
+    (1 + exp(-par[2]))
+  t1min <- exp(-(len[1] - peak)^2 / upselex)
+  t2min <- exp(-(len[j2] - peak2)^2 / downselex)
+  t1 <- len - peak
+  t2 <- len - peak2
+  join1 <- 1 / (1 + exp(-(20 / (1 + abs(t1))) * t1))
+  join2 <- 1 / (1 + exp(-(20 / (1 + abs(t2))) * t2))
+  asc <- point1 + (1 - point1) * (exp(-t1^2 / upselex) - t1min) / (1 - t1min)
+  dsc <- 1 + (point2 - 1) * (exp(-t2^2 / downselex) - 1) / (t2min - 1)
+  asc * (1 - join1) + join1 * (1 - join2 + dsc * join2)
+}
+
+bet_selectivity_curve <- function(par_sel, series) {
+  map_dfr(seq_len(nrow(par_sel)), function(f) {
+    sel <- if (bet_sel_raw$sel_type_f[f] == 1L) {
+      sel_logistic_plain(bet_sel_raw$len_mid, par_sel[f, ])
+    } else {
+      sel_double_normal_plain(bet_sel_raw$len_mid, par_sel[f, ])
+    }
+    tibble(
+      Fishery = paste("Fishery", f),
+      length = bet_sel_raw$len_mid,
+      selectivity = as.numeric(sel),
+      series = series
+    )
+  })
+}
+
+bet_selectivity_df <- bind_rows(
+  bet_selectivity_curve(bet_sel_raw$par_est, "opal estimate"),
+  bet_selectivity_curve(bet_sel_raw$par_ref, "SS3 reference")
+) %>%
+  mutate(
+    Fishery = factor(Fishery, levels = paste("Fishery", seq_len(nrow(bet_sel_raw$par_est)))),
+    series = factor(series, levels = c("SS3 reference", "opal estimate"))
+  )
+
+ggplot(bet_selectivity_df, aes(x = length, y = selectivity)) +
+  geom_line(data = filter(bet_selectivity_df, series == "SS3 reference"),
+            colour = "black", linetype = "dashed", linewidth = 0.45) +
+  geom_line(data = filter(bet_selectivity_df, series == "opal estimate"),
+            colour = "cyan4", linewidth = 0.7) +
+  facet_wrap(~ Fishery, ncol = 3) +
+  labs(x = "Length (cm)", y = "Selectivity") +
+  coord_cartesian(ylim = c(0, 1)) +
+  theme_minimal()
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-biomass
+#| fig-cap: "Estimated spawning biomass and relative biomass trajectories for the fitted WCPO bigeye tuna diagnostic model. Shaded ribbons show approximate 95% intervals; report-level standard errors are used where finite, with a 10% CV display ribbon used where those standard errors are unavailable."
+#| fig-height: 5
+#| fig-width: 8
+
+bet_biomass_unc <- bet$diagnostics$biomass_uncertainty
+if (is.null(bet_biomass_unc)) {
+  stop("BET biomass uncertainty is not available in the cached results")
+}
+bet_display_se <- function(value, se) {
+  ifelse(is.finite(se), se, abs(value) * 0.10)
 }
 bet_biomass <- bind_rows(
-  data.frame(
-    year = bet_year,
-    quantity = "Spawning biomass (mt)",
-    value = bet$report$spawning_biomass_y
-  ),
-  data.frame(
-    year = bet_year,
-    quantity = "SB/B0",
-    value = bet$report$spawning_biomass_y / bet$report$B0
-  ),
-  data.frame(
-    year = bet_year,
-    quantity = "SB/SB_F0",
-    value = bet$report$dynamic_depletion_y
+  bet_biomass_unc %>%
+    mutate(se = bet_display_se(spawning_biomass, spawning_biomass_se)) %>%
+    transmute(
+      year,
+      quantity = "Spawning biomass (mt)",
+      value = spawning_biomass,
+      lower = pmax(0, spawning_biomass - 1.96 * se),
+      upper = spawning_biomass + 1.96 * se
+    ),
+  bet_biomass_unc %>%
+    mutate(se = bet_display_se(sb_sb0, sb_sb0_se)) %>%
+    transmute(
+      year,
+      quantity = "SB/SB0",
+      value = sb_sb0,
+      lower = pmax(0, sb_sb0 - 1.96 * se),
+      upper = sb_sb0 + 1.96 * se
+    ),
+  bet_biomass_unc %>%
+    mutate(se = bet_display_se(dynamic_depletion, dynamic_depletion_se)) %>%
+    transmute(
+      year,
+      quantity = "SB/SB_F0",
+      value = dynamic_depletion,
+      lower = pmax(0, dynamic_depletion - 1.96 * se),
+      upper = dynamic_depletion + 1.96 * se
+    )
+) %>%
+  mutate(
+    quantity = factor(
+      quantity,
+      levels = c("Spawning biomass (mt)", "SB/SB0", "SB/SB_F0")
+    )
   )
-)
 
 ggplot(bet_biomass, aes(x = year, y = value)) +
+  geom_ribbon(aes(ymin = lower, ymax = upper),
+              fill = "cyan4", alpha = 0.18, colour = NA) +
   geom_line(colour = "cyan4", linewidth = 0.9) +
   facet_wrap(~ quantity, ncol = 1, scales = "free_y") +
   labs(x = "Year", y = NULL) +
