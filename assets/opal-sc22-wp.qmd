@@ -103,6 +103,8 @@ library(RTMB)
 library(tidyverse)
 library(SparseNUTS)
 library(posterior)
+library(bayesplot)
+library(patchwork)
 
 ```
 
@@ -123,6 +125,7 @@ opal_models <- c(
   "opal"           = unname(opal_cols["teal"]),
   "opal (with LF)" = unname(opal_cols["teal"]),
   "opal estimate"  = unname(opal_cols["teal"]),
+  "opal (RE)"      = unname(opal_cols["midblue"]),
   "SS3"            = unname(opal_cols["navy"]),
   "SS3 EM"         = unname(opal_cols["navy"]),
   "SS3 reference"  = unname(opal_cols["navy"]),
@@ -183,10 +186,10 @@ doc_dir <- tryCatch(
   error = function(e) "."
 )
 paka_fit_candidates <- c(
-  file.path(doc_dir, "cached", "opakapaka", "opal_lf_fit.rds"),
-  file.path(doc_dir, "assets", "cached", "opakapaka", "opal_lf_fit.rds"),
-  file.path(getwd(), "cached", "opakapaka", "opal_lf_fit.rds"),
-  file.path(getwd(), "assets", "cached", "opakapaka", "opal_lf_fit.rds")
+  file.path(doc_dir, "cached", "opakapaka", "opal_lf-re_fit.rds"),
+  file.path(doc_dir, "assets", "cached", "opakapaka", "opal_lf-re_fit.rds"),
+  file.path(getwd(), "cached", "opakapaka", "opal_lf-re_fit.rds"),
+  file.path(getwd(), "assets", "cached", "opakapaka", "opal_lf-re_fit.rds")
 )
 paka_fit_path <- paka_fit_candidates[file.exists(paka_fit_candidates)][1]
 paka_cache_dir <- if (is.na(paka_fit_path)) {
@@ -196,7 +199,7 @@ paka_cache_dir <- if (is.na(paka_fit_path)) {
 }
 dir.create(paka_cache_dir, recursive = TRUE, showWarnings = FALSE)
 if (is.na(paka_fit_path)) {
-  paka_fit_path <- file.path(paka_cache_dir, "opal_lf_fit.rds")
+  paka_fit_path <- file.path(paka_cache_dir, "opal_lf-re_fit.rds")
 }
 
 ## ---- Fit + diagnostics (fully cached) ------------------------------------
@@ -337,6 +340,7 @@ map_sel <- as.vector(map_sel)
 map_lf <- map
 map_lf$par_sel <- factor(map_sel)
 
+start_time <- Sys.time()
 obj_lf <- MakeADFun(func = cmb(opal_model, data_lf),
                     parameters = parameters,
                     map        = map_lf)
@@ -357,6 +361,7 @@ Lwr_lf[grep("par_sel",     names(obj_lf$par))] <- -7
 Upr_lf[grep("par_sel",     names(obj_lf$par))] <-  7
 
 ## ---- Fit: three-pass nlminb ----------------------------------------------
+
 control <- list(eval.max = 10000, iter.max = 10000)
 opt_lf <- nlminb(start = obj_lf$par, objective = obj_lf$fn,
                  gradient = obj_lf$gr, lower = Lwr_lf, upper = Upr_lf,
@@ -369,16 +374,94 @@ opt_lf <- nlminb(start = opt_lf$par, objective = obj_lf$fn,
                  control = control)
 invisible(obj_lf$fn(opt_lf$par))   # set last.par to the MLE
 
+
 ## ---- Convergence diagnostics ---------------------------------------------
 sdr_lf   <- RTMB::sdreport(obj_lf)
+end_time <- Sys.time()
+paka_runtime <- end_time - start_time
+
 paka_mgc <- max(abs(obj_lf$gr(opt_lf$par)))
 # Estimability is the convergence criterion (in place of opt_lf$convergence);
 # capture the full return so it is cached and re-printed verbatim in BLOCK C.
+invisible(obj_lf$fn(opt_lf$par))
 estim    <- tryCatch(check_estimability(obj = obj_lf), error = function(e) e)
+
+paka_iterations <- opt_lf$iterations
+paka_fn_evals   <- opt_lf$evaluations[1]
+paka_gr_evals   <- opt_lf$evaluations[2]
+
+invisible(obj_lf$fn(opt_lf$par))
+paka_hess = optimHess(par = opt_lf$par, fn = obj_lf$fn, gr = obj_lf$gr)
+paka_hess_eigen_values <- eigen(paka_hess)$values
 
 ## ---- Estimated spawning biomass + SS3 OM / EM ----------------------------
 rep_lf <- obj_lf$report()
 data(opaka_truth)
+
+## ---- simulate ------------------------------------------------------------
+n_sims <- 500
+
+invisible(obj_lf$fn(opt_lf$par))
+
+set.seed(124)
+paka_sims_cpue <- replicate(n_sims, obj_lf$simulate()$cpue_log_obs)
+
+
+## ---- random effects model-------------------------------------------------
+
+map_re <- map_lf
+map_re$log_sigma_r <- as.factor(1)
+
+start_time_re <- Sys.time()
+obj_re <- RTMB::MakeADFun(
+  func       = cmb(opal_model, data_lf),
+  parameters = parameters,
+  map        = map_re,
+  random     = c("init_rdev_a", "rdev_y"),
+  silent     = TRUE
+)
+
+Lwr_re <- rep(-Inf, length(obj_re$par))
+Upr_re <- rep( Inf, length(obj_re$par))
+Lwr_re[grep("log_B0",      names(obj_re$par))] <- log(1)
+Upr_re[grep("log_B0",      names(obj_re$par))] <- log(exp(22))
+Lwr_re[grep("log_cpue_q",  names(obj_re$par))] <- log(0.001)
+Upr_re[grep("log_cpue_q",  names(obj_re$par))] <- log(10)
+Lwr_re[grep("log_sigma_r",  names(obj_re$par))] <- log(0.001)
+Upr_re[grep("log_sigma_r",  names(obj_re$par))] <- log(1.5)
+Lwr_re[grep("rdev_y",      names(obj_re$par))] <- -5
+Upr_re[grep("rdev_y",      names(obj_re$par))] <-  5
+Lwr_re[grep("init_rdev_a", names(obj_re$par))] <- -5
+Upr_re[grep("init_rdev_a", names(obj_re$par))] <-  5
+Lwr_re[grep("par_sel",     names(obj_re$par))] <- -7
+Upr_re[grep("par_sel",     names(obj_re$par))] <-  7
+
+control_re <- list(eval.max = 10000, iter.max = 10000)
+
+opt_re <- nlminb(start = obj_re$par, objective = obj_re$fn,
+                 gradient = obj_re$gr,
+                 lower = Lwr_re, upper = Upr_re, control = control_re)
+opt_re <- nlminb(start = opt_re$par, objective = obj_re$fn,
+                 gradient = obj_re$gr,
+                 lower = Lwr_re, upper = Upr_re, control = control_re)
+
+sdr_re   <- RTMB::sdreport(obj_re)
+end_time_re <- Sys.time()
+paka_runtime_re <- end_time_re - start_time_re
+
+paka_mgc_re <- max(abs(obj_re$gr(opt_re$par)))
+
+invisible(obj_re$fn(opt_re$par))
+estim_re    <- tryCatch(check_estimability(obj = obj_re), error = function(e) e)
+
+paka_iterations_re <- opt_re$iterations
+paka_fn_evals_re   <- opt_re$evaluations[1]
+paka_gr_evals_re   <- opt_re$evaluations[2]
+
+invisible(obj_re$fn(opt_re$par))
+paka_hess_re = optimHess(par = opt_re$par, fn = obj_re$fn, gr = obj_re$gr)
+paka_hess_eigen_values_re <- eigen(paka_hess_re)$values
+rep_re <- obj_re$report()
 
 ## ---- Bayesian (MCMC) summaries -------------------------------------------
 # The dense-metric NUTS fit is pre-computed and distributed with the package.
@@ -519,6 +602,33 @@ paka <- list(
   em = subset(opaka_truth$em$sprseries, Yr %in% calendar_years,
               select = c(Yr, SSB))
 )
+
+paka$report <- rep_lf
+paka$runtime <- paka_runtime
+paka$iterations <- paka_iterations
+paka$fn_evals   <- paka_fn_evals
+paka$gr_evals   <- paka_gr_evals
+paka$hess_eigen_values <- paka_hess_eigen_values
+paka$sims_cpue <- paka_sims_cpue
+paka$sdreport <- sdr_lf
+paka$sdreport_re <- sdr_re
+
+paka$par_re     <- opt_re$par
+paka$pdh_re     <- isTRUE(sdr_re$pdHess)
+paka$mgc_re     <- paka_mgc_re
+paka$mgc_sci_re <- formatC(paka_mgc_re, format = "e", digits = 2)
+paka$ssb_re     <- data.frame(
+  year     = calendar_years,
+  estimate = rep_re$spawning_biomass_y[1:data$n_year],
+  model    = "opal (RE)"
+)
+paka$report_re <- rep_re
+paka$runtime_re <- paka_runtime_re
+paka$estim_re   <- estim_re
+paka$iterations_re <- paka_iterations_re
+paka$fn_evals_re   <- paka_fn_evals_re
+paka$gr_evals_re   <- paka_gr_evals_re
+paka$hess_eigen_values_re <- paka_hess_eigen_values_re
 
 ## ---- Bayesian + projection outputs appended to the bundle ----------------
 paka$mcmc_diag        <- mcmc_diag
@@ -931,12 +1041,11 @@ Two case studies are distributed with the package as worked examples. The first 
 
 The first case study uses simulated data for Hawai'i 'opakapaka (*Pristipomoides filamentosus*), a deepwater snapper, for which the true population dynamics are known. The reference model was constructed in SS3 [v3.30.19\; @methot_stock_2013] as part of an associated simulation study [@oshima_opakapaka_2026], which provides both an operating model that generates the data and an estimation model fitted to those data. The `opal` model covers the historical period 1949--2023 with three fleets --- a commercial fishery, a non-commercial fishery, and a research-fishery survey --- at an annual time step, and fits to two CPUE indices, generated with negligible observation error, together with length composition data from the commercial and survey fleets.
 
-The case study is configured to estimate population scale, annual recruitment deviations, initial age structure, and selectivity parameters for the fleets that have length composition data, with the remaining life-history and fishery parameters fixed at the values used to generate the simulated data. Because the operating model is built in SS3, the case study also serves as a cross-platform comparison: it provides a basis for evaluating the correspondence between the `opal` and SS3 population-dynamics calculations under identical inputs, and for comparing the spawning-biomass trajectory and parameter estimates from `opal` against the operating-model truth and the SS3 estimation model.
+Two versions of the `opal` model are configured in this case study. A baseline fixed effects version is configured to estimate population scale, annual recruitment deviations, initial age structure, and selectivity parameters for the fleets that have length composition data, with the remaining life-history and fishery parameters fixed at the values used to generate the simulated data. Alternatively, a random effects version of the `opal` model was configured identically to the first with the exception that random effects were used to estimate the annual recruitment deviations and the initial age structure, and recruitment variability `log_sigma_r` was estimated. Additionally, because the operating model is built in SS3, the case study also serves as a cross-platform comparison: it provides a basis for evaluating the correspondence between the `opal` and SS3 population-dynamics calculations under identical inputs, and for comparing the spawning-biomass trajectory and parameter estimates from `opal` against the operating-model truth and the SS3 estimation model. As shown in @fig-paka-lf-biomass, `opal` is capable of reproducing the SS3 simulated spawning-biomass trajectory demonstrating that the internal population dynamics engine is sound.
 
-Fitting the length composition likelihood and freeing selectivity for the commercial and survey fleets, the resulting estimated spawning-biomass trajectory is compared against the SS3 operating and estimation models in
-@fig-paka-lf-biomass. Model convergence is summarised by @tbl-paka-lf-convergence.
+Model convergence is summarised by @tbl-paka-lf-convergence. Both `opal` models converged and completed standard error calculations fairly quickly (~`r round(as.numeric(paka$runtime, units = "secs"))` seconds for the fixed effects model, ~`r round(as.numeric(paka$runtime_re, units = "mins"))` minutes for the random effects model both of which were substantially faster than the ~6 minutes for the SS3 model) without any issues detected with regards to the gradient or Hessian and all parameters (including `log_sigma_r` in the random effects model) were identifiable according to `check_estimability()`. Using `RTMB`'s `simulate()` function it is possible to quickly generate simulated data from the fitted model. These simulates datasets can either be refit within the model (e.g., simulation self-testing) or used to generate posterior predictive distributions for the observed data. Using the commercial fishery index as an example, @fig-paka-cpue-ppc shows that the observed CPUE does tend to fall within the posterior predictive distribution (Panels A & B) however the PIT ECDF plot indicates the predictions to be overdispered relative to the observations. This overdispersion makes sense given that the commercial fishery index was generated with negligible observation error and `RTMB`'s `simulate()` function incorporates both the full uncertainty (observation + process error) from the estimated model.
 
-The same model was also fitted with the Bayesian workflow (@sec-bayesian-inference): a dense-metric NUTS sampler was run for eight chains, which were well mixed with split-$\hat{R}$ close to one and large effective sample sizes for the scalar parameters and recruitment deviations (@tbl-paka-mcmc-diag, @fig-paka-mcmc-trace). The stock was then projected ten years forward under a constant catch held at the terminal year's level, propagating parameter uncertainty through both the MVN and MCMC approaches (@sec-projections). The two approaches agree closely at the projection-start state, and the projection intervals widen only gradually because 'opakapaka is long-lived and matures slowly, so the existing adult biomass declines nearly deterministically under constant catch while future recruitment and selectivity uncertainty accumulate over the projection horizon (@fig-paka-projection).
+The fixed effects model was also fitted with the Bayesian workflow (@sec-bayesian-inference): a dense-metric NUTS sampler was run for eight chains, which were well mixed with split-$\hat{R}$ close to one and large effective sample sizes for the scalar parameters and recruitment deviations (@tbl-paka-mcmc-diag, @fig-paka-mcmc-trace). The stock was then projected ten years forward under a constant catch held at the terminal year's level, propagating parameter uncertainty through both the MVN and MCMC approaches (@sec-projections). The two approaches agree closely at the projection-start state, and the projection intervals widen only gradually because 'opakapaka is long-lived and matures slowly, so the existing adult biomass declines nearly deterministically under constant catch while future recruitment and selectivity uncertainty accumulate over the projection horizon (@fig-paka-projection).
 
 ## 2020 western and central Pacific Ocean bigeye tuna {#sec-case-bet}
 
@@ -998,10 +1107,11 @@ Generative AI tools were used to assist with code development, refactoring, and 
 
 ```{r}
 #| label: tbl-paka-lf-convergence
-#| tbl-cap: "opal (with LF) convergence diagnostics: positive-definite Hessian, maximum absolute gradient (mgc), minimum Hessian eigenvalue, and parameter estimability."
+#| tbl-cap: "`opal` 'opakapaka model metrics: positive-definite Hessian, maximum absolute gradient (mgc), minimum Hessian eigenvalue, parameter estimability, runtime, number of parameters, and sigma R."
 #| echo: false
 
 est <- paka$estim
+est_re <- paka$estim_re
 
 if (inherits(est, "condition")) {
   # check_estimability() failed and the condition was cached in Block B.
@@ -1018,24 +1128,61 @@ if (inherits(est, "condition")) {
   }
 }
 
+if (inherits(est_re, "condition")) {
+  # check_estimability() failed and the condition was cached in Block B.
+  min_eig_chr_re  <- "\u2014"
+  estim_status_re <- paste0("check failed: ", conditionMessage(est_re))
+} else {
+  n_bad_re       <- length(est_re$WhichBad)
+  min_eig_chr_re <- formatC(min(est_re$Eigen$values), format = "e", digits = 2)
+  estim_status_re <- if (n_bad_re == 0) {
+    "0 (all parameters estimable)"
+  } else {
+    bad_names_re <- rownames(est_re$Hess)[est_re$WhichBad]
+    paste0(n_bad_re, " (", paste(bad_names_re, collapse = ", "), ")")
+  }
+}
+
+paka_nll = paka$report$lp_prior + paka$report$lp_penalty + paka$report$lp_rec + paka$report$lp_init_rec + sum(paka$report$lp_cpue) + sum(paka$report$lp_lf) + sum(paka$report$lp_wf)
+
+paka_nll_re = paka$report_re$lp_prior + paka$report_re$lp_penalty + paka$report_re$lp_rec + paka$report_re$lp_init_rec + sum(paka$report_re$lp_cpue) + sum(paka$report_re$lp_lf) + sum(paka$report_re$lp_wf)
+
 conv_tbl <- data.frame(
-  Diagnostic = c("Positive-definite Hessian",
+  Metric = c(
+                 "Positive-definite Hessian",
                  "Max |gradient| (mgc)",
                  "Min Hessian eigenvalue",
-                 "Inestimable parameters"),
-  Value = c(as.character(paka$pdh),
+                 "Inestimable parameters",
+                 "Runtime (seconds)",
+                 "N parameters (fixed)",
+                 "N parameters (random)",
+                 "sigma R"),
+  Value_fe = c(as.character(paka$pdh),
             paka$mgc_sci,
             min_eig_chr,
-            estim_status),
+            estim_status,
+            round(as.numeric(paka$runtime, units = "secs"),digits=2),
+            length(paka$par),
+            0,
+            paste0(round(exp(-0.6539265),digits=2), " (fixed)")),
+  Value_re = c(as.character(paka$pdh_re),
+            paka$mgc_sci_re,
+            min_eig_chr_re,
+            estim_status_re,
+            round(as.numeric(paka$runtime_re, units = "secs"),digits=2),
+            length(paka$par_re),
+            length(paka$par)-(length(paka$par_re)-1),
+            round(unname(exp(paka$par_re["log_sigma_r"])),digits=2)),
   check.names = FALSE
 )
+colnames(conv_tbl) <- c("Metric", "opal", "opal (RE)")
 
-knitr::kable(conv_tbl, booktabs = TRUE, align = c("l", "l"))
+knitr::kable(conv_tbl, booktabs = TRUE, align = c("l", "l","l"))
 ```
 
 ```{r}
 #| label: tbl-paka-mcmc-diag
-#| tbl-cap: "Posterior summaries and MCMC convergence diagnostics for the 'opakapaka opal (with LF) model: the MLE estimate, posterior mean and standard deviation, 5th and 95th percentiles, bulk and tail effective sample sizes (ESS), and split-Rhat, for the scalar parameters (unfished spawning biomass and the two CPUE catchabilities) and three representative recruitment deviations."
+#| tbl-cap: "Posterior summaries and MCMC convergence diagnostics for the 'opakapaka opal model: the MLE estimate, posterior mean and standard deviation, 5th and 95th percentiles, bulk and tail effective sample sizes (ESS), and split-Rhat, for the scalar parameters (unfished spawning biomass and the two CPUE catchabilities) and three representative recruitment deviations."
 #| echo: false
 
 mdiag <- paka$mcmc_diag
@@ -1322,25 +1469,120 @@ bet_parameter_bounds_kable
 ```{r}
 #| echo: false
 #| label: fig-paka-lf-biomass
-#| fig-cap: "Estimated spawning-biomass trajectory for the 'opakapaka `opal` model compared with the SS3 operating model (OM) and estimation model (EM), 1949--2023."
+#| fig-cap: "Estimated spawning-biomass trajectory for the 'opakapaka `opal` model estimated using either fixed effects or random effects (RE) compared with the SS3 operating model (OM) and estimation model (EM), 1949--2023."
 #| fig-height: 4.5
 #| fig-width: 8
+calendar_years = paka$ssb$year
+paka_opal_fe = data.frame(model = rep("opal", length(calendar_years)),
+                          year = calendar_years,
+                          value = paka$sdreport$value[which(names(paka$sdreport$value) == "spawning_biomass_y")][1:length(calendar_years)],
+                          se = paka$sdreport$sd[which(names(paka$sdreport$value) == "spawning_biomass_y")][1:length(calendar_years)])
+paka_opal_fe$lo95 = paka_opal_fe$value - 1.96 * paka_opal_fe$se
+paka_opal_fe$hi95 = paka_opal_fe$value + 1.96 * paka_opal_fe$se
+
+paka_opal_re = data.frame(model = rep("opal (RE)", length(calendar_years)),
+                          year = calendar_years,
+                          value = paka$sdreport_re$value[which(names(paka$sdreport_re$value) == "spawning_biomass_y")][1:length(calendar_years)],
+                          se = paka$sdreport_re$sd[which(names(paka$sdreport_re$value) == "spawning_biomass_y")][1:length(calendar_years)])
+paka_opal_re$lo95 = paka_opal_re$value - 1.96 * paka_opal_re$se
+paka_opal_re$hi95 = paka_opal_re$value + 1.96 * paka_opal_re$se
 
 ybmax_lf <- max(paka$ssb$estimate, paka$om$SSB, paka$em$SSB, na.rm = TRUE)
 
 ggplot() +
-  geom_line(data = paka$ssb,
-            aes(x = year, y = estimate, colour = "opal"),
+  geom_ribbon(data = paka_opal_fe,
+              aes(year, ymin = lo95, ymax = hi95, fill = model), alpha = 0.25) +
+  geom_ribbon(data = paka_opal_re,
+              aes(year, ymin = lo95, ymax = hi95, fill = model), alpha = 0.25) +
+  geom_line(data = paka_opal_fe,
+            aes(x = year, y = value, colour = "opal"),
+            linewidth = 1) +
+  geom_line(data = paka_opal_re,
+            aes(x = year, y = value, colour = "opal (RE)"),
             linewidth = 1) +
   geom_line(data = paka$om,
             aes(x = Yr, y = SSB, colour = "SS3 OM"),
             linewidth = 1, linetype = "dashed") +
   geom_line(data = paka$em,
-            aes(x = Yr, y = SSB, colour = "SS3 EM"), linewidth = 1) +
-  scale_colour_opal(breaks = c("opal", "SS3 OM", "SS3 EM")) +
+            aes(x = Yr, y = SSB, colour = "SS3 EM"), linetype = "dotted", linewidth = 1) +
+  scale_colour_opal("Model",breaks = c("opal", "opal (RE)", "SS3 OM", "SS3 EM")) +
+  scale_fill_opal("Model", breaks = c("opal", "opal (RE)", "SS3 OM", "SS3 EM")) +
   labs(x = "Year", y = "Spawning biomass", colour = NULL) +
   scale_y_continuous(limits = c(0, ybmax_lf * 1.2)) +
   theme_opal()
+```
+
+```{r}
+#| label: fig-paka-cpue-ppc
+#| fig-cap: "Posterior predictive checks using the `bayesplot` package for the 'opakapaka commercial CPUE index (fishery 1) under the opal model. Simulated replicates in aqua, observations in dark teal. Left to right: replicate trajectories, density overlay, and PIT ECDF calibration check."
+#| fig-width: 9
+#| fig-height: 7
+#| message: false
+#| warning: false
+
+nsims <- 50
+
+  mle_sims = as.data.frame(paka$sims_cpue[which(opaka_data$cpue_data$fishery==1),]) %>%
+  pivot_longer(cols = everything(), names_to = "sim", values_to = "cpue") %>%
+  filter(sim %in% sample(unique(sim), nsims))
+  mle_sims$x = sort(rep(opaka_data$cpue_data$year[which(opaka_data$cpue_data$fishery==1)],nsims))
+
+
+# --- opal palette wiring -----------------------------------------------------
+# bayesplot's 6 scheme slots run light -> dark:
+#   light / light_highlight  -> yrep replicate lines & PIT bands
+#   dark / dark_highlight     -> the observed y curve / ECDF line
+opal_sim <- "#7DD2DB"   # simulated replicates (aqua)
+opal_obs <- "#0E4049"   # observed (dark teal, emphasis)
+
+color_scheme_set(c(
+  opal_sim,   # light
+  "#5EBFCB",  # light_highlight
+  "#27A7BE",  # mid  (opal teal)
+  "#1F8B9E",  # mid_highlight
+  "#155F6B",  # dark
+  opal_obs    # dark_highlight
+))
+
+# --- data --------------------------------------------------------------------
+idx <- which(opaka_data$cpue_data$fishery == 1)
+
+y    <- log(opaka_data$cpue_data$value[idx])         # observed, log units
+yrep <- t(as.matrix(paka$sims_cpue[idx, ]))          # [draws x obs]
+
+# guard against NA columns (years without CPUE) that break density estimation
+ok   <- stats::complete.cases(t(yrep)) & !is.na(y)
+y    <- y[ok]
+yrep <- yrep[, ok, drop = FALSE]
+stopifnot(ncol(yrep) == length(y))
+
+set.seed(1)
+draws <- sample(nrow(yrep), min(nsims, nrow(yrep)))
+
+# --- panels ------------------------------------------------------------------
+p_dens <- ppc_dens_overlay(y, yrep[draws, , drop = FALSE]) +
+  ggplot2::ggtitle("CPUE density overlay") +
+  xlab("log(CPUE)") +
+  ylab("Density") +
+  theme_opal()
+
+p_pit <- ppc_pit_ecdf(y, yrep) +
+  ggplot2::ggtitle("PIT ECDF") +
+  theme_opal()
+
+p_traj <- ggplot() +
+  ylab("log(CPUE)") +
+  xlab("Year") +
+  geom_line(data = mle_sims, aes(x = x, y = cpue, group = sim),
+            colour = opal_sim, alpha = 0.4) +
+  geom_line(data = opaka_data$cpue_data[idx, ],
+            aes(x = year, y = log(value)),
+            colour = opal_obs, linewidth = 1.5, inherit.aes = FALSE) +
+  ggtitle("CPUE trajectories") +
+  theme_opal()
+
+p_traj + p_dens + p_pit +
+  plot_annotation(tag_levels = "A")
 ```
 
 ```{r}
@@ -2063,7 +2305,7 @@ ggplot(bet_rec_df, aes(x = year, y = rdev)) +
 ```{r}
 #| echo: false
 #| label: fig-bet-selectivity-length
-#| fig-cap: "Selectivity-at-length curves for WCPO bigeye tuna fisheries. Teal lines show the fitted opal selectivity curves; dashed navy lines show the SS3 reference selectivity curves used to initialise the opal model."
+#| fig-cap: "Selectivity-at-length curves for WCPO bigeye tuna fisheries. Teal lines show the fitted opal selectivity curves; dashed navy lines show the SS3 reference selectivity curves used to initialise the opal model; dotted coral lines show the MFCL reference selectivity curves."
 #| fig-height: 8
 #| fig-width: 8
 
@@ -2114,20 +2356,40 @@ bet_selectivity_curve <- function(par_sel, series) {
   })
 }
 
+# MFCL reference selectivity — already realized at-length, not parametric,
+# so reshape rather than evaluate through a selectivity function
+wcpo_bet_xmodel_selex <- readRDS(file.path("cached", "bet", "wcpo_bet_xmodel_selex.rds"))
+
+n_fishery <- nrow(bet_sel_raw$par_est)
+
+# simpler/cleaner version of the above filter — keep fisheries that exist
+# in the opal comparison
+mfcl_selectivity_df <- wcpo_bet_xmodel_selex %>%
+  filter(Sex == 0, Yr == max(Yr), Fleet <= n_fishery) %>%
+  transmute(
+    Fishery = paste("Fishery", Fleet),
+    length = variable,
+    selectivity = value,
+    series = "MFCL"
+  )
+
 bet_selectivity_df <- bind_rows(
-  bet_selectivity_curve(bet_sel_raw$par_est, "opal estimate"),
-  bet_selectivity_curve(bet_sel_raw$par_ref, "SS3 reference")
+  bet_selectivity_curve(bet_sel_raw$par_est, "opal"),
+  bet_selectivity_curve(bet_sel_raw$par_ref, "SS3"),
+  mfcl_selectivity_df
 ) %>%
   mutate(
-    Fishery = factor(Fishery, levels = paste("Fishery", seq_len(nrow(bet_sel_raw$par_est)))),
-    series = factor(series, levels = c("SS3 reference", "opal estimate"))
+    Fishery = factor(Fishery, levels = paste("Fishery", seq_len(n_fishery))),
+    series = factor(series, levels = c("SS3", "MFCL", "opal"))
   )
 
 ggplot(bet_selectivity_df, aes(x = length, y = selectivity)) +
-  geom_line(data = filter(bet_selectivity_df, series == "SS3 reference"),
-            colour = opal_models["SS3 reference"], linetype = "dashed", linewidth = 0.55) +
-  geom_line(data = filter(bet_selectivity_df, series == "opal estimate"),
-            colour = opal_models["opal estimate"], linewidth = 0.7) +
+  geom_line(data = filter(bet_selectivity_df, series == "SS3"),
+            colour = opal_models["SS3"], linetype = "dashed", linewidth = 0.55) +
+  geom_line(data = filter(bet_selectivity_df, series == "MFCL"),
+            colour = opal_models["MFCL"], linetype = "dotted", linewidth = 0.55) +
+  geom_line(data = filter(bet_selectivity_df, series == "opal"),
+            colour = opal_models["opal"], linewidth = 0.7) +
   facet_wrap(~ Fishery, ncol = 3) +
   labs(x = "Length (cm)", y = "Selectivity") +
   coord_cartesian(ylim = c(0, 1)) +
