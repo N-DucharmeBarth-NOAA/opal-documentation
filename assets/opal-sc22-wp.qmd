@@ -1226,7 +1226,19 @@ bet_agg6_comp_fit_summary <- bet_agg6_comp_fit_summary %>%
   )
 ```
 
+\newpage
 
+![](static/opal-HEX-transparent.png){fig-align="center" width="200px"}
+
+# Executive summary {#sec-executive-summary .unnumbered}
+
+This paper describes `opal` (the **o**pen **p**opulation **a**ssessment **l**ibrary), an open-source, modular R package for fisheries stock assessment, and illustrates its application through two case studies. Development of `opal` is aligned with and supported by *WCPFC Project 123: Scoping the next generation of tuna stock assessment software*, and the current working paper is intended to document a proof of concept for R-based, modular assessment software rather than a finished platform for producing management advice.
+
+`opal` is built on RTMB, which provides automatic differentiation of the objective function, gradient-based optimization, and the Laplace approximation for models with random effects. Writing the model in R keeps the full model definition within a single language, lowering the barrier to inspecting and extending the code. The package builds on the `sbt` package developed for the assessment of southern bluefin tuna, and draws design influences from several existing assessment packages including Stock Synthesis (SS3), and MULTIFAN-CL (MFCL). It estimates age-structured population dynamics with length-based processes; fits CPUE together with length- and weight-composition data under a choice of likelihoods; supports random-effects estimation, catch-based projections, and Bayesian inference via SparseNUTS; and includes a set of built-in diagnostics, comprising estimability and parameter-correlation checks, simulation self-testing, posterior-predictive checks, and one-step-ahead (OSA) residuals.
+
+Two case studies were developed to show case model features, capabilities and available diagnostics. The first case study applied `opal` to simulated data for Hawai'i 'opakapaka (*Pristipomoides filamentosus*), for which the true dynamics are known from an SS3 operating model. `opal` closely tracked the SS3 spawning-biomass trajectory and the known simulated truth. This case study also illustrated the random-effects, projection, and Bayesian workflows, though the random-effects model was substantially slower than its fixed-effects counterpart. The second case study applied `opal` to real data from the 2020 WCPO bigeye tuna (*Thunnus obesus*) assessment, in a fleets-as-areas configuration, and compared its outputs against the SS3 and MFCL reference models. `opal` closely tracked the spawning-biomass and depletion trajectories of both platforms, though the absolute spawning-biomass scale differed, consistent with differences in selectivity parameterization, composition weighting, and catch-removal calculations across the three models.
+
+Both case studies are illustrative and are not intended to inform management advice. Together they demonstrate that `opal` can estimate population dynamics, accommodate the data volume and dimensionality of a real tuna assessment, and readily produce diagnostic outputs. They also identify outstanding challenges, including the robustness of optimization from naive starting values, the scaling of random effects to higher-dimensional models, and ongoing code optimization.
 
 \newpage
 
