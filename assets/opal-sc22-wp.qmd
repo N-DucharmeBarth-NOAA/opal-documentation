@@ -1240,6 +1240,12 @@ Two case studies were developed to show case model features, capabilities and av
 
 Both case studies are illustrative and are not intended to inform management advice. Together they demonstrate that `opal` can estimate population dynamics, accommodate the data volume and dimensionality of a real tuna assessment, and readily produce diagnostic outputs. They also identify outstanding challenges, including the robustness of optimization from naive starting values, the scaling of random effects to higher-dimensional models, and ongoing code optimization.
 
+We invite SC22 to:
+
+- Note the development of `opal` as a proof of concept for R-based, modular assessment software, and its application to two case studies.
+- Comment on the suitability of `opal` for assessments of various species (e.g., tuna, shark and billfish) within the WCPFC.
+- Endorse the continued development of `opal` as the core development stream for the next generation of tuna assessment software.
+
 \newpage
 
 ![](static/opal-HEX-transparent.png){fig-align="center" width="200px"}
