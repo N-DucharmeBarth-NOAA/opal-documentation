@@ -59,7 +59,9 @@ group_summary <- imap_dfr(groups, function(old_f, g_chr) {
     total_catch = sum(catch_old_f[old_f])
   )
 }) |>
-  mutate(percent = 100 * total_catch / sum(total_catch))
+  group_by(catch_units) |>
+  mutate(percent = 100 * total_catch / sum(total_catch)) |>
+  ungroup()
 
 if (any(lengths(strsplit(group_summary$sel_type, ",", fixed = TRUE)) > 1L)) {
   stop("A group has mixed selectivity types")

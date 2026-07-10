@@ -685,14 +685,6 @@ if (is.na(bet_fit_path)) {
 bet <- readRDS(bet_fit_path)
 bet_final_sb_b0 <- tail(bet$report$spawning_biomass_y, 1) / bet$report$B0
 bet_final_dyn_dep <- tail(bet$report$dynamic_depletion_y, 1)
-bet_objective_components <- bet$diagnostics$objective_components
-if (is.null(bet_objective_components)) {
-  stop("BET objective components are not available in the cached results")
-}
-bet_objective_component_total <- sum(bet_objective_components)
-if (abs(bet_objective_component_total - bet$opt$objective) > 1e-6) {
-  stop("BET objective components do not sum to the optimizer objective")
-}
 format_duration <- function(seconds) {
   if (is.null(seconds) || length(seconds) == 0 || !is.finite(seconds)) {
     return("not recorded")
@@ -782,6 +774,81 @@ bet_agg6_group_labels <- bet_agg6$grouping %>%
     fishery = group,
     group_label = paste0("Group ", group, " (old F", old_fisheries, ")")
   )
+
+source_opal_r_env <- function(path) {
+  r_dir <- file.path(path, "R")
+  if (!dir.exists(r_dir)) {
+    stop("Local opal source directory not found: ", r_dir)
+  }
+  env <- new.env(parent = globalenv())
+  for (file in list.files(r_dir, pattern = "\\.R$", full.names = TRUE)) {
+    sys.source(file, envir = env)
+  }
+  env
+}
+
+bet_switch_objective_components <- function(result, opal_env) {
+  fit <- result$fit
+  if (is.null(fit) || is.null(fit$data) || is.null(fit$parameters) ||
+      is.null(fit$map)) {
+    stop("Switch objective decomposition requires raw fit data, parameters, and map")
+  }
+  make_obj <- function(cpue_switch, lf_switch, wf_switch) {
+    data_i <- fit$data
+    data_i$cpue_switch <- as.integer(cpue_switch)
+    data_i$lf_switch <- as.integer(lf_switch)
+    data_i$wf_switch <- as.integer(wf_switch)
+    obj <- MakeADFun(
+      func = opal_env$cmb(opal_env$opal_model, data_i),
+      parameters = fit$parameters,
+      map = fit$map
+    )
+    obj$env$tracemgc <- FALSE
+    obj
+  }
+
+  par <- result$opt$par
+  values <- c(
+    none = make_obj(0L, 0L, 0L)$fn(par),
+    cpue_only = make_obj(1L, 0L, 0L)$fn(par),
+    lf_only = make_obj(0L, 1L, 0L)$fn(par),
+    wf_only = make_obj(0L, 0L, 1L)$fn(par),
+    all = make_obj(1L, 1L, 1L)$fn(par)
+  )
+  components <- c(
+    "Baseline contribution" = unname(values[["none"]]),
+    "CPUE contribution" = unname(values[["cpue_only"]] - values[["none"]]),
+    "LF contribution" = unname(values[["lf_only"]] - values[["none"]]),
+    "WF contribution" = unname(values[["wf_only"]] - values[["none"]])
+  )
+  total <- sum(components)
+  if (abs(total - values[["all"]]) > 1e-6) {
+    stop("Switch objective components do not sum to all-on objective")
+  }
+  if (abs(values[["all"]] - result$opt$objective) > 1e-5) {
+    stop("Switch all-on objective does not match cached optimizer objective")
+  }
+  components
+}
+
+bet_opal_source_dir <- Sys.getenv("OPAL_SOURCE_DIR", "/home/darcy/Projects/opal")
+bet_opal_source_env <- source_opal_r_env(bet_opal_source_dir)
+bet_raw_source <- if (!is.null(bet$source) && file.exists(bet$source)) {
+  readRDS(bet$source)[[1]]
+} else {
+  NULL
+}
+if (is.null(bet_raw_source)) {
+  stop("Retained BET raw source cache is required for switch objective decomposition")
+}
+bet_objective_components <- bet_switch_objective_components(
+  bet_raw_source,
+  bet_opal_source_env
+)
+bet_agg6_objective_components <- bet_switch_objective_components(
+  bet_agg6_raw$result,
+  bet_opal_source_env
+)
 
 bet_harmonic_mean <- function(x) {
   x <- x[is.finite(x) & x > 0]
@@ -1038,22 +1105,6 @@ bet_comp_diagnostic_summary <- bet_comp_diagnostic_summary %>%
 
 bet_agg6_report <- bet_agg6_raw$result$report
 bet_agg6_data <- bet_agg6_raw$result$fit$data
-bet_agg6_objective_components <- c(
-  "Prior contribution" = sum(as.numeric(bet_agg6_report$lp_prior)),
-  "Recruitment-deviation contribution" = sum(as.numeric(bet_agg6_report$lp_rec)) +
-    sum(as.numeric(bet_agg6_report$lp_init_rec)),
-  "CPUE contribution" = sum(as.numeric(bet_agg6_report$lp_cpue)),
-  "Composition contribution" = as.numeric(bet_agg6_metrics$nll) -
-    sum(as.numeric(bet_agg6_report$lp_prior)) -
-    sum(as.numeric(bet_agg6_report$lp_rec)) -
-    sum(as.numeric(bet_agg6_report$lp_init_rec)) -
-    sum(as.numeric(bet_agg6_report$lp_cpue)) -
-    sum(as.numeric(bet_agg6_report$lp_penalty)),
-  "Harvest penalty" = sum(as.numeric(bet_agg6_report$lp_penalty))
-)
-if (abs(sum(bet_agg6_objective_components) - bet_agg6_metrics$nll) > 1e-6) {
-  stop("Six-fishery BET objective components do not sum to the optimizer objective")
-}
 
 bet_agg6_cpue_resid <- (
   log(bet_agg6_data$cpue_data$value) -
@@ -1234,7 +1285,7 @@ bet_agg6_comp_fit_summary <- bet_agg6_comp_fit_summary %>%
 
 This paper describes `opal` (the **o**pen **p**opulation **a**ssessment **l**ibrary), an open-source, modular R package for fisheries stock assessment, and illustrates its application through two case studies. Development of `opal` is aligned with and supported by *WCPFC Project 123: Scoping the next generation of tuna stock assessment software*, and the current working paper is intended to document a proof of concept for R-based, modular assessment software rather than a finished platform for producing management advice.
 
-`opal` is built on RTMB, which provides automatic differentiation of the objective function, gradient-based optimization, and the Laplace approximation for models with random effects. Writing the model in R keeps the full model definition within a single language, lowering the barrier to inspecting and extending the code. The package builds on the `sbt` package developed for the assessment of southern bluefin tuna, and draws design influences from several existing assessment packages including Stock Synthesis (SS3), and MULTIFAN-CL (MFCL). It estimates age-structured population dynamics with length-based processes; fits CPUE together with length- and weight-composition data under a choice of likelihoods; supports random-effects estimation, catch-based projections, and Bayesian inference via SparseNUTS; and includes a set of built-in diagnostics, comprising estimability and parameter-correlation checks, simulation self-testing, posterior-predictive checks, and one-step-ahead (OSA) residuals.
+`opal` is built on RTMB, which provides automatic differentiation of the objective function, gradient-based optimization, and the Laplace approximation for models with random effects. Writing the model in R keeps the full model definition within a single language, lowering the barrier to inspecting and extending the code. The package builds on the `sbt` package developed for the assessment of southern bluefin tuna, and draws design influences from several existing assessment packages including Stock Synthesis (SS3) and MULTIFAN-CL (MFCL). It estimates age-structured population dynamics with length-based processes; fits CPUE together with length- and weight-composition data under a choice of likelihoods; supports random-effects estimation, catch-based projections, and Bayesian inference via SparseNUTS; and includes a set of built-in diagnostics, comprising estimability and parameter-correlation checks, simulation self-testing, posterior-predictive checks, and one-step-ahead (OSA) residuals.
 
 Two case studies were developed to showcase model features, capabilities and available diagnostics. The first case study applied `opal` to simulated data for Hawai'i 'opakapaka (*Pristipomoides filamentosus*), for which the true dynamics are known from an SS3 operating model. `opal` closely tracked the SS3 spawning-biomass trajectory and the known simulated truth. This case study also illustrated the random-effects, projection, and Bayesian workflows, though the random-effects model was substantially slower than its fixed-effects counterpart. The second case study applied `opal` to real data from the 2020 WCPO bigeye tuna (*Thunnus obesus*) assessment, in a fleets-as-areas configuration, and compared its outputs against the SS3 and MFCL reference models. `opal` closely tracked the spawning-biomass and depletion trajectories of both platforms, though the absolute spawning-biomass scale differed, consistent with differences in selectivity parameterization, composition weighting, and catch-removal calculations across the three models.
 
@@ -1254,7 +1305,7 @@ We invite SC22 to:
 
 [`opal`](https://n-ducharmebarth-noaa.github.io/opal/) --- the **o**pen **p**opulation **a**ssessment **l**ibrary --- is an open-source, modular R package for fisheries stock assessment. The package is built on RTMB [@kristensen_rtmb_2023], an R interface to the Template Model Builder framework [@kristensen_tmb_2016], which provides automatic differentiation of the model objective function and supports gradient-based optimization and the Laplace approximation for models that include random effects. Writing the model in R rather than C++ keeps the entire model definition within a single language environment, which lowers the barrier to inspecting, modifying, and extending the underlying code.
 
-`opal` builds directly upon the `sbt` R package developed by [Quantifish](https://www.quantifish.co.nz/) for the assessment of southern bluefin tuna under the Commission for the Conservation of Southern Bluefin Tuna [CCSBT\; @webber_sbt_2026], and draws on design influences from a number of existing assessment platforms, including the Stochastic Population over Regional Components model [SPoRC\; @cheng_span_2026], the Woods Hole Assessment Model [WHAM\; @stock_woods_2021; @miller_woods_2020], Stock Synthesis [SS3\; @methot_stock_2013], and MULTIFAN-CL [MFCL\; @fournier_multifan-cl_1998]. The development of `opal` is aligned with and supported by *WCPFC Project 123: Scoping the next generation of tuna stock assessment software*. It provides a proof of concept for the R-based modular software development and takes significant steps towards developing core modules for next generation tuna assessment software.
+`opal` builds directly upon the `sbt` R package developed by [Quantifish](https://www.quantifish.co.nz/) for the assessment of southern bluefin tuna under the Commission for the Conservation of Southern Bluefin Tuna [CCSBT\; @webber_sbt_2026], and draws on design influences from a number of existing assessment platforms, including the Stochastic Population over Regional Components model [SPoRC\; @cheng_span_2026], the Woods Hole Assessment Model [WHAM\; @stock_woods_2021; @miller_woods_2020], Stock Synthesis [SS3\; @methot_stock_2013], CASAL2 [@casal2_development_team_casal2_2026], and MULTIFAN-CL [MFCL\; @fournier_multifan-cl_1998]. The development of `opal` is aligned with and supported by *WCPFC Project 123: Scoping the next generation of tuna stock assessment software*. It provides a proof of concept for the R-based modular software development and takes significant steps towards developing core modules for next generation tuna assessment software.
 
 The intent of `opal` is to provide assessment scientists with a flexible modelling framework that supports the estimation of random effects; facilitates enhanced model diagnostics, including one-step-ahead (OSA) residuals, simulation self-testing, and posterior predictive checks; and integrates directly into a Bayesian estimation framework. These capabilities are described in @sec-features.
 
@@ -1264,7 +1315,7 @@ The package source code, function documentation, and worked examples are publicl
 
 # Model structure {#sec-model-structure}
 
-`opal` estimates age-structured population dynamics and accommodates length-based processes. The population is tracked as numbers-at-age. Biological quantities --- weight, maturity, fecundity, natural mortality, and sex ratio --- may be supplied on either an age basis or a length basis: a vector defined over age classes is used directly, while a vector defined over length bins is converted to age through a probability-of-length-at-age (PLA) matrix. Selectivity is likewise defined on a length basis and mapped to age through the PLA. This structure allows population demographics to be specified in terms of either age or length, and allows the model to fit multiple data types: relative abundance indices (CPUE), length composition, and weight composition. Where time-varying or hierarchically structured processes are required, parameters may be specified as random effects and integrated out using the Laplace approximation provided by RTMB [@kristensen_tmb_2016].
+`opal` estimates age-structured population dynamics and accommodates age- or length-based processes. The population is tracked as numbers-at-age. Biological quantities --- weight, maturity, fecundity, natural mortality, and sex ratio --- may be supplied on either an age basis or a length basis: a vector defined over age classes is used directly, while a vector defined over length bins is converted to age through a probability-of-length-at-age (PLA) matrix. Selectivity is likewise defined on a length basis and mapped to age through the PLA. This structure allows population demographics to be specified in terms of either age or length, and allows the model to fit multiple data types: relative abundance indices (CPUE), length composition, and weight composition. Where time-varying or hierarchically structured processes are required, parameters may be specified as random effects and integrated out using the Laplace approximation provided by RTMB [@kristensen_tmb_2016].
 
 The model is implemented as a single objective function, `opal_model()`, that returns the negative log-likelihood (NLL) for a given set of parameters and data. Rather than encoding the population dynamics and observation model as a single monolithic routine, `opal_model()` orchestrates a sequence of standalone, individually documented module functions, each responsible for one component of the calculation. Population-model components --- growth, selectivity, recruitment, and the data likelihoods --- are implemented as separate exported functions rather than embedded in a single routine, so that components can be modified, replaced, or extended independently, and so that individual modules can be tested in isolation. The collection of module functions is registered through a single accessor for use when the model is passed to the Bayesian sampler. This modular organization is intended to make the codebase tractable to maintain, human readable and to lower the barrier to community contribution.
 
@@ -1477,15 +1528,15 @@ The fixed effects model was also fitted with the Bayesian workflow (@sec-bayesia
 
 The second case study used the data from a fleets-as-areas model described in the appendix of the 2020 assessment of bigeye tuna (*Thunnus obesus*) in the western and central Pacific Ocean [WCPO\;@ducharme-barth_stock_2020]. The bundled data object contained the biological parameters, catch and standardized CPUE observations, length and weight composition data, configured at a quarterly time step across the fisheries defined in the fleets-as-areas assessment, with selectivity specified by fishery as either logistic or double-normal forms.
 
-The current diagnostic configuration uses the quarterly standardized CPUE series as four seasonal indices, fits length compositions from fisheries 8--14, and fits weight compositions from fisheries 1, 2, 3, 4, 6, 7, and 15. Sensitivity runs indicated that the size-composition likelihoods pulled the absolute spawning-biomass scale below the SS3 and MFCL reference models, while posterior-predictive composition checks indicated uneven relative weighting among fisheries. The retained fit therefore uses fishery-specific variance adjustments: the background length-frequency (LF) adjustment is `r bet_lf_adjust_scalar`, with LF overrides `r bet_lf_override_text`; the background weight-frequency (WF) adjustment is `r bet_wf_adjust`, with WF overrides `r bet_wf_override_text`. A direct cache audit confirmed that these LF/WF adjustment vectors are active in the retained 15-fishery fit and that the matched six-fishery sensitivity uses LF adjustments of 50,000 for group 1 and 800 for groups 2--4, with a WF adjustment of 20,000 for groups 5--6. Weight-composition fishery 5 remains inactive after diagnostic runs failed to converge cleanly. Recruitment deviations are estimated across the model period, catchability is estimated separately by quarterly index, and selected selectivity parameters are estimated for the fisheries with active composition data. Growth, natural mortality, steepness, recruitment variability, effort creep (assumed to be zero), and the remaining selectivity parameters are fixed at the bundled reference values. The quarterly catch history used by the model is shown by fishery and catch-unit group in @fig-bet-catch-weight and @fig-bet-catch-numbers.
+The current diagnostic configuration uses the quarterly standardized CPUE series as four seasonal indices, fits length compositions from fisheries 8--14, and fits weight compositions from fisheries 1, 2, 3, 4, 6, 7, and 15. Sensitivity runs indicated that the size-composition likelihoods pulled the absolute spawning-biomass scale below the SS3 and MFCL reference models, while posterior-predictive composition checks indicated uneven relative weighting among fisheries. The retained fit therefore uses fishery-specific variance adjustments to the length-frequency (LF) and weight-frequency (WF) data sets. Weight-compositions for fishery 5 remains inactive after diagnostic runs failed to converge cleanly. Recruitment deviations are estimated across the model period, catchability is estimated separately by quarterly index, and selected selectivity parameters are estimated for the fisheries with active composition data. Growth, natural mortality, steepness, recruitment variability, effort creep (assumed to be zero), and the remaining selectivity parameters are fixed at the bundled reference values. The quarterly catch history used by the model is shown by fishery and catch-unit group in @fig-bet-catch-weight and @fig-bet-catch-numbers.
 
-The cached bigeye tuna (BET) model was refitted after relaxing the lower bound on $\log(B_0)$, fixing weakly identified selectivity width terms indicated by the bound, profile, and Hessian diagnostics, and applying the composition weighting described above. The final constrained configuration converged according to `nlminb`, with the raw and KKT-style[^1] gradients both close to zero; remaining active selectivity bounds are reported in @tbl-bet-selectivity-issues. Fitting this diagnostic configuration from the retained-cache starting values to the maximum-likelihood estimate took approximately `r bet_mle_runtime_text` on the workstation used to build this document; the final optimizer restart recorded `r bet_mle_iterations` iterations, `r bet_mle_function_evals` function evaluations, and `r bet_mle_gradient_evals` gradient evaluations. Hessian-based uncertainty was computed with `RTMB::sdreport()` using a supplied fixed-effect Hessian from `optimHess()` with a finite-difference step of $10^{-4}$; this Hessian was positive definite, with minimum eigenvalue `r signif(bet$diagnostics$biomass_uncertainty_min_hessian_eigenvalue, 3)`. The additive objective decomposition is still dominated numerically by the downweighted composition likelihoods, especially the weight-composition component, while the CPUE component contributes the abundance trend information and the recruitment-deviation density regularizes quarterly departures from the stock-recruitment curve. The estimated unfished spawning biomass is approximately `r format(round(bet$report$B0), big.mark = ",")` mt, close to the MFCL implied scale of `r format(round(bet_mfcl_b0), big.mark = ",")` mt and closer to the SS3 fixed-selectivity scale of `r format(round(bet_ss3_fix_b0), big.mark = ",")` mt than an earlier higher-composition-weight diagnostic fit. The final-year relative spawning biomass is `r round(bet_final_sb_b0, 3)` when scaled by $SB_0$ (@tbl-bet-depletion). The dynamic depletion ratio is slightly higher (`r round(bet_final_dyn_dep, 3)`) because it uses the time-varying unfished spawning biomass denominator rather than the static $SB_0$ denominator.
+The final bigeye tuna (BET) model configuration converged according to `nlminb`, with a KKT-style[^1] projected gradient close to zero after accounting for active parameter bounds; the larger raw gradient is reported separately in @tbl-bet-fit-summary. Remaining active selectivity bounds are reported in @tbl-bet-selectivity-issues. Fitting this diagnostic configuration from the retained-cache starting values to the maximum-likelihood estimate took approximately `r bet_mle_runtime_text` on the workstation used to build this document; the final optimizer restart recorded `r bet_mle_iterations` iterations, `r bet_mle_function_evals` function evaluations, and `r bet_mle_gradient_evals` gradient evaluations. Hessian-based uncertainty was computed with `RTMB::sdreport()` using a supplied fixed-effect Hessian from `optimHess()` with a finite-difference step of $10^{-4}$; this Hessian was positive definite, with minimum eigenvalue `r signif(bet$diagnostics$biomass_uncertainty_min_hessian_eigenvalue, 3)`. The additive objective decomposition is still dominated numerically by the downweighted composition likelihoods, especially the weight-composition component, while the CPUE component contributes the abundance trend information and the recruitment-deviation density regularizes quarterly departures from the stock-recruitment curve. The estimated unfished spawning biomass is approximately `r format(round(bet$report$B0), big.mark = ",")` mt, close to the MFCL implied scale of `r format(round(bet_mfcl_b0), big.mark = ",")` mt and closer to the SS3 fixed-selectivity scale of `r format(round(bet_ss3_fix_b0), big.mark = ",")` mt than an earlier higher-composition-weight diagnostic fit. The final-year relative spawning biomass is `r round(bet_final_sb_b0, 3)` when scaled by $SB_0$ (@tbl-bet-depletion). The dynamic depletion ratio is slightly lower (`r round(bet_final_dyn_dep, 3)`) because it uses the time-varying unfished spawning biomass denominator rather than the static $SB_0$ denominator.
 
 [^1]: Following the Karush–Kuhn–Tucker (KKT) conditions for bound-constrained optimization, gradient components at an active bound are not treated as evidence of non-convergence provided their sign is consistent with the constraint (e.g., pushing further against, rather than away from, the bound).
 
 An additional exploratory BET model was fitted after aggregating the 15 original fisheries to six fisheries using the grouped downweighted LF/WF configuration described above (@tbl-bet-agg6-grouping). This sensitivity was intended to test whether the many small fisheries were materially affecting the abundance scale or the CPUE fit, rather than to replace the retained diagnostic model. Under the six-fishery aggregation, $B_0$ is `r format(round(bet_agg6_metrics$B0), big.mark = ",")` mt and final-year $SB/SB_0$ is `r round(bet_agg6_final_sb_b0, 3)`, compared with `r format(round(bet$report$B0), big.mark = ",")` mt and `r round(bet_final_sb_b0, 3)` for the retained 15-fishery model (@tbl-bet-agg6-summary). The CPUE log-RMSE is also similar (`r sprintf("%.3f", bet_agg6_metrics$log_cpue_rmse)` for the six-fishery model versus `r sprintf("%.3f", bet_cpue_log_rmse)` for the retained model), and the six-fishery CPUE and biomass trajectories are included in @fig-bet-cpue-fit and @fig-bet-biomass. The six-fishery selectivity curves in @fig-bet-agg6-selectivity should be interpreted as pooled selectivities for the aggregation groups rather than direct replacements for the original fishery-specific curves.
 
-Diagnostic plots in the `opal` BET vignette compare observed and predicted CPUE by seasonal index, observed and predicted length and weight compositions, fitted recruitment deviations, and estimated selectivity-at-length and selectivity-at-age curves. The CPUE fit in @fig-bet-cpue-fit tracks the broad decline in standardized abundance from the early 1950s through the low-abundance period in the 2000s, while allowing the four quarterly indices to retain their own scale and observation uncertainty; simulated CPUE series from the fitted model show the amount of variation expected under the fitted lognormal observation model. Additionally, illustrative fits to the same index from MFCL and SS3 models are also shown for reference. The CPUE OSA residuals in @fig-bet-osa-residuals are centred close to zero and fall within approximately $\pm 2$ residual units, but the Q-Q panels are clearly under-dispersed: standard deviation of normalised residuals (SDNRs) are below one for each index month and for all indices combined (@tbl-bet-cpue-sdnr). For the independent lognormal CPUE likelihood these OSA residuals are equivalent to standardized log residuals, so the flattened Q-Q pattern indicates that the fitted CPUE observation variance is larger than the residual variation, rather than a small number of large outliers [@dunn_randomized_1996; @thygesen_validation_2017]. The length- and weight-composition diagnostics in @fig-bet-lf-diagnostics and @fig-bet-wf-diagnostics sum variance-adjusted pseudo-counts over all years and independently simulate fitted row-level compositions before pooling those simulated counts within fishery. The corresponding grouped diagnostics for the six-fishery sensitivity are shown together in @fig-bet-agg6-composition-diagnostics using the same row-level pooling logic. To show the unaggregated temporal structure, @fig-bet-lf12-year-composition and @fig-bet-wf15-year-composition give year-specific examples for length-composition fishery 12 and weight-composition fishery 15. Example LF and WF composition OSA residual diagnostics are shown for fishery 12 and fishery 15 in @fig-bet-lf-composition-residuals and @fig-bet-wf-composition-residuals; these two panels are examples rather than the full residual set. The by-fishery Q-Q diagnostics in @fig-bet-composition-residual-qq summarise all active composition residuals against a fixed standard-normal reference line, rather than a fitted Q-Q line, so below-one dispersion remains visible; @fig-bet-agg6-composition-residual-qq repeats this Q-Q layout for the six-fishery grouped sensitivity using the same `compResidual::resMulti()` residual calculation on the grouped compositions. Following the diagnostic summaries commonly applied in CCSBT assessments of southern bluefin tuna, @tbl-bet-composition-sdnr reports finite bin-level OSA SDNRs generated with `r bet_comp_residual_source` for both the retained 15-fishery model and the matched six-fishery sensitivity. The near-one OSA SDNRs are conditional on the variance-adjusted input sample sizes used in the retained likelihood; the mean input $N$ by retained-model fishery ranges from `r signif(bet_comp_mean_input_n_range[1], 3)` to `r signif(bet_comp_mean_input_n_range[2], 3)` after downweighting. The close Q-Q alignment is therefore a check of the randomized bin-level residual distribution for the weighted pseudo-data likelihood, not evidence that the raw composition data are perfectly fitted.
+Diagnostic plots in the `opal` BET vignette compare observed and predicted CPUE by seasonal index, observed and predicted length and weight compositions, fitted recruitment deviations, and estimated selectivity-at-length and selectivity-at-age curves. The CPUE fit in @fig-bet-cpue-fit tracks the broad decline in standardized abundance from the early 1950s through the low-abundance period in the 2000s, while allowing the four quarterly indices to retain their own scale and observation uncertainty; simulated CPUE series from the fitted model show the amount of variation expected under the fitted lognormal observation model. Additionally, illustrative fits to the same index from MFCL and SS3 models are also shown for reference. The CPUE OSA residuals in @fig-bet-osa-residuals are centred close to zero and fall within approximately $\pm 2$ residual units, but the Q-Q panels are clearly under-dispersed: standard deviation of normalised residuals (SDNRs) are below one for each index month and for all indices combined (@tbl-bet-cpue-sdnr). For the independent lognormal CPUE likelihood these OSA residuals are equivalent to standardized log residuals, so the flattened Q-Q pattern indicates that the fitted CPUE observation variance is larger than the residual variation, rather than a small number of large outliers [@dunn_randomized_1996; @thygesen_validation_2017]. The length- and weight-composition diagnostics in @fig-bet-lf-diagnostics and @fig-bet-wf-diagnostics sum variance-adjusted pseudo-counts over all years and independently simulate fitted row-level compositions before pooling those simulated counts within fishery. The corresponding grouped diagnostics for the six-fishery sensitivity are shown together in @fig-bet-agg6-composition-diagnostics using the same row-level pooling logic. To show the unaggregated temporal structure, @fig-bet-lf12-year-composition and @fig-bet-wf15-year-composition give year-specific examples for length-composition fishery 12 and weight-composition fishery 15. Example LF and WF composition OSA residual diagnostics are shown for fishery 12 and fishery 15 in @fig-bet-lf-composition-residuals and @fig-bet-wf-composition-residuals; these two panels are examples rather than the full residual set. The by-fishery Q-Q diagnostics in @fig-bet-composition-residual-qq summarise all active composition residuals against a fixed standard-normal reference line, rather than a fitted Q-Q line, so below-one dispersion remains visible; @fig-bet-agg6-composition-residual-qq repeats this Q-Q layout for the six-fishery grouped sensitivity using the same `compResidual::resMulti()` residual calculation on the grouped compositions. Following the diagnostic summaries commonly applied in CCSBT assessments of southern bluefin tuna, @tbl-bet-composition-sdnr reports finite bin-level OSA SDNRs generated with `r bet_comp_residual_source` for both the retained 15-fishery model and the matched six-fishery sensitivity. The near-one OSA SDNRs are conditional on the variance-adjusted input sample sizes used in the retained likelihood; the mean input $N$ by retained-model fishery ranges from `r signif(bet_comp_mean_input_n_range[1], 3)` to `r signif(bet_comp_mean_input_n_range[2], 3)` after downweighting. Because these variance adjustments produce fractional pseudo-counts, including sub-unit effective sample sizes for some rows, the multinomial composition likelihood in this diagnostic fit should be interpreted as a weighted pseudo-likelihood convention rather than a literal integer-count multinomial sampling model. The close Q-Q alignment is therefore a check of the randomized bin-level residual distribution for the weighted pseudo-data likelihood, not evidence that the raw composition data are perfectly fitted.
 
 The CPUE residual pattern supported reducing the fixed CPUE $\tau$ (additional observation standard deviation) and/or scaling the CPUE SEs down. The retained BET fits now fix $\tau$ at `r bet_cpue_fixed_tau_text` for all four CPUE indices; the only active CPUE parameters are the four catchability terms. Relative to the earlier cached run with $\tau = 0.1$, setting $\tau$ near zero reduced the mean CPUE standard deviation from 0.222 to 0.198, but increased the all-index CPUE SDNR only from 0.513 to `r round(bet$diagnostics$cpue_sdnr$SDNR[bet$diagnostics$cpue_sdnr$index == "All indices"], 3)`. Removing the fixed $\tau$ therefore helps only modestly and does not resolve the under-dispersion by itself. Further CPUE upweighting would require scaling the CPUE SEs down and should not be treated as an automatic tuning to SDNR = 1 without checking the consequences to the biomass estimates and composition fits.
 
@@ -1642,23 +1693,12 @@ knitr::kable(
 
 ```{r}
 #| label: tbl-bet-fit-summary
-#| tbl-cap: "Optimization and objective-component summary for the fitted WCPO bigeye tuna diagnostic model and matched six-fishery aggregation sensitivity. The Max KKT gradient is the maximum projected gradient after accounting for active parameter bounds. Objective components are shown as a complete additive decomposition for each model; length- and weight-composition terms are combined so both BET columns are directly comparable."
+#| tbl-cap: "Optimization and objective-component summary for the fitted WCPO bigeye tuna diagnostic model and matched six-fishery aggregation sensitivity. The Max KKT gradient is the maximum projected gradient after accounting for active parameter bounds. Objective components are a switch-based additive audit at the fitted parameter vector: the baseline has CPUE, length-composition (LF), and weight-composition (WF) likelihood switches off, and the CPUE, LF, and WF rows are single-switch differences from that baseline."
 #| echo: false
 
 format_bet_value <- function(x, digits = 2) {
   format(round(x, digits), big.mark = ",", nsmall = digits)
 }
-
-bet_objective_components_combined <- c(
-  "Prior contribution" = unname(bet_objective_components["Prior contribution"]),
-  "Recruitment-deviation contribution" =
-    unname(bet_objective_components["Recruitment-deviation contribution"]),
-  "CPUE contribution" = unname(bet_objective_components["CPUE contribution"]),
-  "Composition contribution" =
-    unname(bet_objective_components["Length-composition contribution"]) +
-    unname(bet_objective_components["Weight-composition contribution"]),
-  "Harvest penalty" = unname(bet_objective_components["Harvest penalty"])
-)
 
 bet_fit_tbl <- data.frame(
   Metric = c(
@@ -1667,11 +1707,10 @@ bet_fit_tbl <- data.frame(
     "Max |gradient|",
     "Max KKT gradient",
     "B0",
-    "Prior contribution",
-    "Recruitment-deviation contribution",
+    "Baseline contribution",
     "CPUE contribution",
-    "Composition contribution",
-    "Harvest penalty",
+    "LF contribution",
+    "WF contribution",
     "Objective-component total"
   ),
   `15-fishery BET` = c(
@@ -1680,12 +1719,11 @@ bet_fit_tbl <- data.frame(
     round(bet$raw_grad, 4),
     round(bet$kkt_grad, 4),
     format(round(bet$report$B0), big.mark = ","),
-    format_bet_value(bet_objective_components_combined["Prior contribution"]),
-    format_bet_value(bet_objective_components_combined["Recruitment-deviation contribution"]),
-    format_bet_value(bet_objective_components_combined["CPUE contribution"]),
-    format_bet_value(bet_objective_components_combined["Composition contribution"]),
-    format_bet_value(bet_objective_components_combined["Harvest penalty"]),
-    format_bet_value(sum(bet_objective_components_combined))
+    format_bet_value(bet_objective_components["Baseline contribution"]),
+    format_bet_value(bet_objective_components["CPUE contribution"]),
+    format_bet_value(bet_objective_components["LF contribution"]),
+    format_bet_value(bet_objective_components["WF contribution"]),
+    format_bet_value(sum(bet_objective_components))
   ),
   `6-fishery BET` = c(
     bet_agg6_metrics$convergence,
@@ -1693,11 +1731,10 @@ bet_fit_tbl <- data.frame(
     round(bet_agg6_metrics$raw_max_gradient, 4),
     round(bet_agg6_metrics$kkt_max_gradient, 4),
     format(round(bet_agg6_metrics$B0), big.mark = ","),
-    format_bet_value(bet_agg6_objective_components["Prior contribution"]),
-    format_bet_value(bet_agg6_objective_components["Recruitment-deviation contribution"]),
+    format_bet_value(bet_agg6_objective_components["Baseline contribution"]),
     format_bet_value(bet_agg6_objective_components["CPUE contribution"]),
-    format_bet_value(bet_agg6_objective_components["Composition contribution"]),
-    format_bet_value(bet_agg6_objective_components["Harvest penalty"]),
+    format_bet_value(bet_agg6_objective_components["LF contribution"]),
+    format_bet_value(bet_agg6_objective_components["WF contribution"]),
     format_bet_value(sum(bet_agg6_objective_components))
   ),
   check.names = FALSE
@@ -1974,17 +2011,20 @@ bet_parameter_bounds_kable
 
 ```{r}
 #| label: tbl-bet-agg6-grouping
-#| tbl-cap: "Six-fishery aggregation used in the exploratory WCPO bigeye tuna BET sensitivity. Original fisheries were pooled only where catch units and selectivity form remained compatible."
+#| tbl-cap: "Six-fishery aggregation used in the exploratory WCPO bigeye tuna BET sensitivity. Original fisheries were pooled only where catch units and selectivity form remained compatible. Catch percentages are calculated separately within metric-ton and thousands-of-fish catch units."
 #| echo: false
 
 bet_agg6_grouping_tbl <- bet_agg6$grouping %>%
+  group_by(catch_units) %>%
+  mutate(percent_within_units = 100 * total_catch / sum(total_catch)) %>%
+  ungroup() %>%
   transmute(
     `Six-fishery group` = group,
     `Original fisheries` = paste0("F", gsub(",", ", F", old_fisheries)),
     `Catch units` = if_else(as.integer(catch_units) == 1L,
                             "metric tons", "thousands of fish"),
     `Selectivity form` = sel_type,
-    `Catch (%)` = sprintf("%.1f", percent)
+    `Within-unit catch (%)` = sprintf("%.1f", percent_within_units)
   )
 
 knitr::kable(bet_agg6_grouping_tbl, booktabs = TRUE,
@@ -3257,7 +3297,7 @@ ggplot(bet_agg6_selectivity_plot, aes(x = length, y = selectivity)) +
 ```{r}
 #| echo: false
 #| label: fig-bet-biomass
-#| fig-cap: "Estimated spawning biomass and relative biomass trajectories for the fitted WCPO bigeye tuna diagnostic model and the matched six-fishery aggregation sensitivity. Shaded ribbons show approximate 95% intervals from model-based standard errors; the retained `opal` ribbon uses `RTMB::sdreport()` with a supplied positive-definite fixed-effect Hessian. The `opal` models are compared with the SS3 and MFCL reference models."
+#| fig-cap: "Estimated spawning biomass and relative biomass trajectories for the fitted WCPO bigeye tuna diagnostic model and the matched six-fishery aggregation sensitivity. Shaded ribbons show approximate 95% intervals from model-based standard errors; the retained `opal` ribbon uses `RTMB::sdreport()` with a supplied positive-definite fixed-effect Hessian. The `opal` models are compared with the SS3 and MFCL reference models; external-model SB/SB0 uses the same median SSB/depletion reference scale reported in the text."
 #| fig-height: 5
 #| fig-width: 8
 
@@ -3330,15 +3370,21 @@ bet_agg6_biomass <- bind_rows(
 # load ss3 and mfcl trajectories for comparison
 bet_xmodel <- readRDS(file.path("cached", "bet", "wcpo_bet_xmodel_biomass.rds"))
 
+xmodel_b0_for_plot <- bet_xmodel_b0 %>%
+  filter(model %in% c("MFCL-v11", "02-fix-sel")) %>%
+  mutate(model = recode(model, "MFCL-v11" = "MFCL", "02-fix-sel" = "SS3")) %>%
+  select(model, B0)
+if (nrow(xmodel_b0_for_plot) != 2L || any(!is.finite(xmodel_b0_for_plot$B0))) {
+  stop("External-model B0 scale is unavailable for the BET biomass comparison")
+}
+
 xmodel_long <- bet_xmodel %>%
   filter(model %in% c("MFCL-v11", "02-fix-sel")) %>%
   mutate(model = recode(model, "MFCL-v11" = "MFCL", "02-fix-sel" = "SS3")) %>%
   arrange(model, ts) %>%
-  group_by(model) %>%
-  mutate(sb0 = mean(ssb[1:4]),
-         static_depletion = ssb / sb0,
-         static_depletion_se = ssb_se / sb0) %>%
-  ungroup() %>%
+  left_join(xmodel_b0_for_plot, by = "model") %>%
+  mutate(static_depletion = ssb / B0,
+         static_depletion_se = ssb_se / B0) %>%
   pivot_longer(
     cols = c(ssb, depletion, static_depletion),
     names_to = "quantity_id",
