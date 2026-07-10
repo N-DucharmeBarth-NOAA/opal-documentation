@@ -775,16 +775,40 @@ bet_agg6_group_labels <- bet_agg6$grouping %>%
     group_label = paste0("Group ", group, " (old F", old_fisheries, ")")
   )
 
-source_opal_r_env <- function(path) {
-  r_dir <- file.path(path, "R")
-  if (!dir.exists(r_dir)) {
-    stop("Local opal source directory not found: ", r_dir)
+source_opal_r_env <- function(path = Sys.getenv("OPAL_SOURCE_DIR", unset = "")) {
+  if (nzchar(path)) {
+    r_dir <- file.path(path, "R")
+    if (!dir.exists(r_dir)) {
+      stop("Local opal source directory not found: ", r_dir)
+    }
+    env <- new.env(parent = globalenv())
+    for (file in list.files(r_dir, pattern = "\\.R$", full.names = TRUE)) {
+      sys.source(file, envir = env)
+    }
+    return(env)
   }
-  env <- new.env(parent = globalenv())
-  for (file in list.files(r_dir, pattern = "\\.R$", full.names = TRUE)) {
-    sys.source(file, envir = env)
+  if (!requireNamespace("opal", quietly = TRUE)) {
+    stop("The opal package is required; install it with renv::restore() or set OPAL_SOURCE_DIR")
   }
-  env
+  asNamespace("opal")
+}
+
+resolve_bet_cache_path <- function(path, cache_dir) {
+  if (is.null(path) || !length(path) || is.na(path) || !nzchar(path)) {
+    return(NA_character_)
+  }
+  path <- gsub("\\\\", "/", path)
+  candidates <- path
+  rel_from_cache <- sub("^.*assets/cached/bet/?", "", path)
+  if (!identical(rel_from_cache, path) && nzchar(rel_from_cache)) {
+    candidates <- c(candidates, file.path(cache_dir, rel_from_cache))
+  }
+  if (!grepl("^/", path)) {
+    candidates <- c(candidates, file.path(cache_dir, path))
+  }
+  candidates <- unique(candidates)
+  hits <- candidates[file.exists(candidates)]
+  if (length(hits)) hits[[1]] else NA_character_
 }
 
 bet_switch_objective_components <- function(result, opal_env) {
@@ -831,8 +855,8 @@ bet_switch_objective_components <- function(result, opal_env) {
   components
 }
 
-bet_opal_source_dir <- Sys.getenv("OPAL_SOURCE_DIR", "/home/darcy/Projects/opal")
-bet_opal_source_env <- source_opal_r_env(bet_opal_source_dir)
+bet_opal_source_env <- source_opal_r_env()
+bet_raw_source_path <- resolve_bet_cache_path(bet$source, dirname(bet_fit_path))
 # `bet$source` records the absolute path on the machine that produced the fit;
 # re-anchor it to this paper's BET cache directory so the retained raw-source
 # cache resolves locally (Darcy to add wf_index_results.rds there and push).
@@ -847,7 +871,7 @@ bet_raw_source <- if (!is.null(bet_raw_source_path) && file.exists(bet_raw_sourc
   NULL
 }
 if (is.null(bet_raw_source)) {
-  stop("Retained BET raw source cache is required for switch objective decomposition")
+  stop("Retained BET raw source cache is required for switch objective decomposition: ", bet$source)
 }
 bet_objective_components <- bet_switch_objective_components(
   bet_raw_source,
