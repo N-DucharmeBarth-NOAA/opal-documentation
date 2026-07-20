@@ -22,10 +22,18 @@ website:
     right:
       - text: "Home"
         href: index.qmd
-      - text: "Quick links"
+      - text: "About"
+        href: assets/about.qmd
+      - text: "Development"
+        href: assets/development.qmd
+      - text: "WCPFC docs"
         menu:
           - text: "SC22 working paper"
             href: assets/opal-sc22-wp.html
+      - text: "Vignettes"
+        menu:
+          - text: "'Opakapaka case study"
+            href: assets/opakapaka.html
       - text: "Package docs"
         href: https://n-ducharmebarth-noaa.github.io/opal/
       - icon: github

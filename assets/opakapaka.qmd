@@ -1,0 +1,798 @@
+---
+title: "'Opakapaka case study"
+format: html
+execute:
+  eval: true
+vignette: >
+  %\VignetteIndexEntry{'Opakapaka case study}
+  %\VignetteEncoding{UTF-8}
+  %\VignetteEngine{quarto::html}
+editor_options:
+  chunk_output_type: console
+---
+
+```{r}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+# Introduction
+
+This vignette configures, fits, and cross-platform benchmarks an `opal` stock
+assessment model for 'opakapaka (*Pristipomoides filamentosus*), a Hawaiian
+deepwater snapper. The reference model was built in Stock Synthesis 3
+(SS3 v3.30.19) as part of the
+[Opaka_simulation](https://github.com/noaa-pifsc/Opaka_simulation) project,
+which provides both an operating model (OM) that generates the data and an
+estimation model (EM) fitted to those data.
+
+Because the OM was built in SS3 and the underlying dynamics are therefore
+known, the case study serves two purposes: it evaluates the correspondence
+between the `opal` and SS3 population-dynamics calculations under identical
+inputs, and it compares `opal`'s estimated spawning-biomass trajectory against
+both the operating-model truth and the SS3 estimation model.
+
+Two versions of the `opal` model are configured, both fitting two CPUE indices
+(generated with negligible observation error) together with length composition
+data from the commercial and survey fleets:
+
+- a **fixed-effects** model that estimates population scale, annual recruitment
+  deviations, initial age structure, and the selectivity parameters of the
+  fleets with length composition data, holding the remaining life-history and
+  fishery parameters at the values used to generate the simulated data; and
+- a **random-effects** model configured identically, except that the annual
+  recruitment deviations and initial age structure are treated as random
+  effects and recruitment variability (`log_sigma_r`) is estimated.
+
+The model covers the historical period 1949--2023 with three fleets: a
+commercial fishery (Comm), a non-commercial fishery (Non_comm), and a research
+fishery survey (ResFish).
+
+This case study is illustrative and is not intended to inform management
+advice.
+
+::: {.callout-note}
+## Caching
+
+Fitting both models and running `sdreport()` is the expensive part of this
+document. To keep render time low for web/page builds, the fit is **cached**:
+on a cache hit nothing from `opal`/`RTMB` is rebuilt and the document consumes
+only a plain-R results bundle (`paka`). The build-and-fit code below runs only
+when the cache is absent, in which case it regenerates and saves the bundle.
+Delete the cached `.rds` to force a refit.
+:::
+
+# Load inputs
+
+Load the `opal` package and its dependencies. `bayesplot` and `patchwork` are
+used for the posterior-predictive diagnostics; `tidyverse` for data
+manipulation and plotting.
+
+```{r}
+#| label: load-pkg
+#| echo: true
+#| message: false
+library(tidyverse)
+library(opal)
+library(RTMB)
+library(bayesplot)
+library(patchwork)
+```
+
+## Plotting palette
+
+A shared palette sampled from the `opal` logo is used across all figures so
+that a given model keeps the same colour throughout. `theme_opal()` replaces
+per-figure theme calls.
+
+```{r}
+#| label: setup-palette
+#| echo: true
+## Colours sampled from the opal logo
+opal_cols <- c(
+  navy  = "#013282", ocean = "#064E8F", midblue = "#066AA7", blue  = "#0181C3",
+  teal  = "#27A7BE", aqua  = "#7DD2DB", gold    = "#FCCF43", coral = "#D92208",
+  truth = "#4D4D4D", obs   = "#B3B3B3", struct  = "#8C8C8C"
+)
+
+## Model dimension: every label variant used here maps to a fixed colour
+opal_models <- c(
+  "opal"        = unname(opal_cols["teal"]),
+  "opal (RE)"   = unname(opal_cols["midblue"]),
+  "SS3 EM"      = unname(opal_cols["navy"]),
+  "SS3 OM"      = unname(opal_cols["truth"])
+)
+
+scale_colour_opal <- function(...) ggplot2::scale_colour_manual(values = opal_models, ...)
+scale_fill_opal   <- function(...) ggplot2::scale_fill_manual(values = opal_models, ...)
+
+## Shared theme
+theme_opal <- function(base_size = 11, base_family = "") {
+  ggplot2::theme_minimal(base_size = base_size, base_family = base_family) +
+    ggplot2::theme(
+      legend.position  = "bottom",
+      panel.grid.minor = ggplot2::element_blank(),
+      strip.background = ggplot2::element_blank()
+    )
+}
+theme_set(theme_opal())
+```
+
+## Data
+
+The bundled data object `opaka_data` contains all biological parameters, catch
+and CPUE observations, length structure, and prior specifications needed for
+the assessment model.
+
+SS3 indexes ages from 0 to 43 (44 age classes), while `opal` uses 1-based
+internal indexing. To align the growth curve, survivorship, and all
+age-structured biology vectors with SS3, we set `A1 = 0` (anchoring the
+Schnute growth parameterization at biological age 0) and redefine `age_a`
+accordingly. The `min_age` field is passed to `get_growth()` so that the age
+sequence starts at 0 rather than 1.
+
+```{r}
+#| label: load-data
+#| echo: true
+#| message: false
+data(opaka_data)
+data <- opaka_data
+if (is.null(data$n_index)) data$n_index <- 2L
+
+# remove priors (regenerated below)
+data$priors <- NULL
+
+# anchor the growth curve at biological age 0 (SS3 indexes ages 0-43)
+data$A1 <- 0
+data$A2 <- data$A1 + (data$n_age - 1)
+data$min_age <- 0
+ages <- data$age_a <- seq(data$min_age, by = 1, length.out = data$n_age)
+
+# calendar years for the modelled period (1949-2023)
+calendar_years <- (1949 - 1) + data$years
+```
+
+Key dimensions of the data:
+
+```{r}
+#| label: data-dims
+#| echo: true
+cat("Number of ages:",       data$n_age,     "\n")
+cat("Number of years:",      data$n_year,    "\n")
+cat("Number of fisheries:",  data$n_fishery, "\n")
+cat("Number of length bins:", data$n_len,    "\n")
+```
+
+## Biological inputs
+
+Natural mortality is constant across all ages at M = 0.135 yr$^{-1}$. Maturity
+follows a length-based logistic curve with Mat50 = 40.7 cm. The length-weight
+relationship uses a = 1.75 $\times 10^{-5}$ and b = 2.99. Fecundity is
+proportional to body weight (SS3 option 1 with a = 1, b = 0).
+
+The sex ratio vector (`sex_ratio`) is set to 1.0 at all ages. Although SS3
+applies a female fraction of 0.5 when computing SSB, this scaling is already
+implicit in `opal`'s $B_0$ parameterization: `opal` defines $B_0$ as
+female-only spawning biomass (matching SS3's reported SSB_Virgin), so the
+per-recruit spawning potential does not require an additional sex-ratio
+multiplier.
+
+```{r}
+#| label: plot-biology
+#| echo: true
+#| message: false
+#| fig-height: 4
+#| fig-width: 7
+data$sex_ratio <- rep(1, data$n_age)
+
+len_mid <- seq(data$len_bin_start + data$len_bin_width / 2,
+               by = data$len_bin_width, length.out = data$n_len)
+
+bind_rows(
+  data.frame(x = ages,    y = data$M,        panel = "M-at-age"),
+  data.frame(x = len_mid, y = data$maturity, panel = "Maturity-at-length")
+) |>
+  ggplot(aes(x, y)) +
+  geom_line(colour = opal_cols["teal"], linewidth = 0.9) +
+  facet_wrap(~panel, scales = "free") +
+  labs(x = NULL, y = NULL) +
+  theme_opal()
+```
+
+## Length composition data
+
+Length composition observations are loaded from the bundled `opaka_lf`
+long-format object and transformed into model-ready arrays. Data are available
+for two fleets: Comm (fleet 1, 1949--2023) and ResFish (fleet 3, 2017--2023).
+Fleet 2 (Non_comm) has no length composition data.
+
+```{r}
+#| label: prep-lf
+#| echo: true
+#| message: false
+data(opaka_lf)
+
+lf_wide <- opaka_lf %>%
+  tidyr::pivot_wider(
+    id_cols     = c(fishery, year, month, ts),
+    names_from  = bin,
+    values_from = value,
+    values_fill = 0
+  ) %>%
+  arrange(fishery, ts)
+
+var_adjust_scalars <- 1 / rep(1, data$n_fishery)
+
+data <- prep_lf_data(data, lf_wide,
+                     lf_keep_fisheries = c(1, 3),
+                     lf_var_adjust     = var_adjust_scalars,
+                     lf_addtocomp      = 1e-10)
+```
+
+## SS3-style bias ramps
+
+SS3 applies a bias-adjustment ramp to the lognormal recruitment correction
+term following Methot and Taylor (2011). The ramp reduces the correction
+$-0.5 \cdot \sigma_R^2$ in years where recruitment deviations are poorly
+informed, preventing mean-unbiasing from introducing systematic bias when
+deviations are estimated imprecisely. It is defined by four control years
+(ascending start, plateau start, plateau end, descending end) and a maximum
+bias-adjustment fraction. Two ramps are constructed: one for the initial age
+cohorts (via `init_bias_adj_a`) and one for the time-series cohorts (via
+`bias_adj_y`), both using the SS3 EM's estimated ramp parameters.
+
+```{r}
+#| label: add-bias-ramp
+#| echo: true
+#| message: false
+# initial cohorts: age_a = 1 (bio age 0) -> born 1949; age_a = 44 -> born 1906
+init_cohort_years <- 1949 - (data$age_a - 1)
+
+data$init_bias_adj_a <- get_bias_adj_vector(
+  years            = init_cohort_years,
+  do_rec_bias_ramp = 1,
+  bias_years       = c(1931, 1974, 2021.88, 2022.43),
+  max_bias_adj     = 0.869
+)
+
+data$bias_adj_y <- get_bias_adj_vector(
+  years            = calendar_years,
+  do_rec_bias_ramp = 1,
+  bias_years       = c(1931, 1974, 2021.88, 2022.43),
+  max_bias_adj     = 0.869
+)
+```
+
+# Model setup
+
+## Parameters
+
+Growth parameters (`log_L1`, `log_L2`, `log_k`, `log_CV1`, `log_CV2`) and
+selectivity (`par_sel`) are initialised from the SS3 estimates in the bundled
+`opaka_parameters` object. The 1949 recruitment deviation seeds the age-0
+cohort of the initial age structure; deviations for 1950--2023 are shifted
+into `rdev_y` with a terminal 0 appended.
+
+```{r}
+#| label: get-pars
+#| echo: true
+#| message: false
+data(opaka_parameters)
+
+# Route the 1949 deviation to biological age 0 (index 1 in opal's 1-based ages).
+init_rdev_a <- rev(c(0.0206807, 0.00321579, 0.00372620, 0.0043174, 0.00500263,
+  0.00579674, 0.00671727, 0.00778422, 0.00902081, 0.0104539, 0.0121143,
+  0.0140375, 0.0162641, 0.0188404, 0.0218182, 0.0252561, 0.0292182, 0.0337726,
+  0.0389898, 0.0449362, 0.0516662, 0.0592049, 0.0675236, 0.0764992, 0.0858443,
+  0.0950047, 0.102706, 0.107687, 0.107712, 0.0998349, 0.0808137, 0.0482339,
+  0.00234443, -0.0517563, -0.102395, -0.131458, -0.121101, -0.0714826,
+  -0.00742166, -0.0109308, -0.0385029, 0.0366483, 0.0165105, -0.166906))
+init_rdev_a[1] <- opaka_parameters$rdev_y[1]
+
+# Shift 1950-2023 into rdev_y and append a terminal 0 for the forecast year.
+rdev_y_shifted <- c(opaka_parameters$rdev_y[2:length(opaka_parameters$rdev_y)], 0.0)
+
+parameters <- list(
+  log_B0         = 9,
+  log_h          = as.numeric(opaka_parameters$log_h),
+  log_sigma_r    = as.numeric(opaka_parameters$log_sigma_r),
+  log_cpue_q     = as.numeric(opaka_parameters$log_cpue_q),
+  log_cpue_tau   = rep(log(0.1), data$n_index),
+  log_cpue_omega = as.numeric(rep(opaka_parameters$log_cpue_omega, data$n_index)),
+  log_lf_tau     = as.numeric(log(rep(0.1, data$n_fishery))),
+  log_L1         = as.numeric(opaka_parameters$log_L1),
+  log_L2         = as.numeric(opaka_parameters$log_L2),
+  log_k          = as.numeric(opaka_parameters$log_k),
+  log_CV1        = as.numeric(opaka_parameters$log_CV1),
+  log_CV2        = as.numeric(opaka_parameters$log_CV2),
+  par_sel        = as.matrix(opaka_parameters$par_sel),
+  log_init_F_f   = c(log(0.0119122), rep(log(1e-8), data$n_fishery - 1)),
+  rdev_y         = rdev_y_shifted,
+  init_rdev_a    = init_rdev_a
+)
+
+# Convert SS3 selectivity parameterization to opal's internal parameterization.
+parameters$par_sel <- convert_ss3_selex_to_rtmb(parameters$par_sel,
+                                                data$sel_type_f, data$len_mid)
+```
+
+## Priors
+
+```{r}
+#| label: get-priors
+#| echo: true
+#| message: false
+data$priors <- get_priors(parameters = parameters, data = data)
+evaluate_priors(parameters = parameters, priors = data$priors)
+```
+
+## Parameter map
+
+RTMB's `map` mechanism controls which parameters are estimated versus fixed;
+parameters mapped to `factor(NA)` are held at their initial values. The base
+map estimates `log_B0`, `log_cpue_q`, `rdev_y`, and `init_rdev_a`, while
+steepness, $\sigma_R$, growth, initial F, and selectivity are held at their SS3
+values. Selectivity is freed for the length-composition fleets in the model
+configuration below.
+
+```{r}
+#| label: get-map
+#| echo: true
+#| message: false
+map_sel    <- as.vector(matrix(NA, nrow(parameters$par_sel), ncol(parameters$par_sel)))
+map_lf_tau <- rep(NA, length(parameters$log_lf_tau))
+
+map <- list(
+  log_h          = factor(NA),
+  log_sigma_r    = factor(NA),
+  log_cpue_tau   = as.factor(rep(NA, data$n_index)),
+  log_cpue_omega = as.factor(rep(NA, data$n_index)),
+  log_lf_tau     = factor(map_lf_tau),
+  log_L1         = factor(NA),
+  log_L2         = factor(NA),
+  log_k          = factor(NA),
+  log_CV1        = factor(NA),
+  log_CV2        = factor(NA),
+  par_sel        = factor(map_sel),
+  log_init_F_f   = rep(factor(NA), data$n_fishery),
+  init_rdev_a    = as.factor(seq_len(data$n_age)),
+  rdev_y         = as.factor(seq_len(length(parameters$rdev_y)))
+)
+```
+
+# Fixed- and random-effects models
+
+The fixed-effects `opal (with LF)` model turns on the length-composition
+likelihood and frees the selectivity of the two fleets with length data: the
+two logistic parameters for Comm (fleet 1) and the peak, ascending-width, and
+descending-width parameters for the ResFish double-normal (fleet 3). Fleet 2
+(Non_comm) retains its fixed SS3 selectivity because it has no length data. All
+other parameters follow the base map: $\sigma_R$, steepness, and growth remain
+fixed at SS3 values; $B_0$, catchabilities, `rdev_y`, and `init_rdev_a` are
+freely estimated.
+
+The random-effects model is configured identically, with two changes: `rdev_y`
+and `init_rdev_a` are integrated out as random effects (via `random =`), and
+`log_sigma_r` is estimated rather than fixed.
+
+## Model configuration
+
+These lightweight configuration objects (data and map) are cheap and always
+evaluated, so the figures below can reference them regardless of the cache
+state.
+
+```{r}
+#| label: model-config
+#| echo: true
+#| message: false
+fleet_names <- c("Comm", "Non_comm", "ResFish")
+
+# ---- Fixed-effects data + map (opal with LF) --------------------------------
+data_lf <- data
+data_lf$lf_switch <- 1L   # multinomial length-composition likelihood
+
+map_sel <- matrix(NA, nrow(parameters$par_sel), ncol(parameters$par_sel))
+map_sel[1, 1:2]        <- c(1, 2)   # Comm:    logistic inflection + width
+map_sel[3, c(1, 4, 6)] <- c(3, 4, 5)  # ResFish: peak, asc-width, desc-width
+map_lf <- map
+map_lf$par_sel <- factor(as.vector(map_sel))
+
+# ---- Random-effects map -----------------------------------------------------
+map_re <- map_lf
+map_re$log_sigma_r <- as.factor(1)   # estimate recruitment variability
+```
+
+## Cache resolution
+
+The cached results bundle is anchored to the document directory when available;
+Quarto's execution directory can vary, so several candidate locations are
+checked. On a cache hit the bundle is loaded and no model is rebuilt.
+
+```{r}
+#| label: cache-setup
+#| echo: true
+#| message: false
+doc_dir <- tryCatch(dirname(knitr::current_input(dir = TRUE)),
+                    error = function(e) ".")
+
+paka_fit_candidates <- c(
+  file.path(doc_dir, "cached", "opakapaka", "opal_lf-re_fit.rds"),
+  file.path(doc_dir, "assets", "cached", "opakapaka", "opal_lf-re_fit.rds"),
+  file.path(getwd(),  "cached", "opakapaka", "opal_lf-re_fit.rds"),
+  file.path(getwd(),  "assets", "cached", "opakapaka", "opal_lf-re_fit.rds")
+)
+
+hit_paths     <- paka_fit_candidates[file.exists(paka_fit_candidates)]
+cache_hit     <- length(hit_paths) > 0
+paka_fit_path <- if (cache_hit) hit_paths[1] else paka_fit_candidates[1]
+
+if (cache_hit) paka <- readRDS(paka_fit_path)
+cat("Cache", if (cache_hit) "hit" else "miss", "->", paka_fit_path, "\n")
+```
+
+## Fit (cache miss only)
+
+The build, bound, optimisation, and `sdreport` steps below execute **only when
+the cache is absent**. `nlminb` is run several times to ensure convergence; the
+final `fn` call resets `last.par` to the MLE so that `sdreport()` and
+`simulate()` operate at the optimum.
+
+```{r}
+#| label: fe-fit
+#| echo: true
+#| results: hide
+if (!cache_hit) {
+  obj_lf <- MakeADFun(func = cmb(opal_model, data_lf),
+                      parameters = parameters, map = map_lf)
+
+  Lwr_lf <- rep(-Inf, length(obj_lf$par)); Upr_lf <- rep(Inf, length(obj_lf$par))
+  Lwr_lf[grep("log_B0",      names(obj_lf$par))] <- log(1)
+  Upr_lf[grep("log_B0",      names(obj_lf$par))] <- log(exp(22))
+  Lwr_lf[grep("log_cpue_q",  names(obj_lf$par))] <- log(0.001)
+  Upr_lf[grep("log_cpue_q",  names(obj_lf$par))] <- log(10)
+  Lwr_lf[grep("rdev_y",      names(obj_lf$par))] <- -5
+  Upr_lf[grep("rdev_y",      names(obj_lf$par))] <-  5
+  Lwr_lf[grep("init_rdev_a", names(obj_lf$par))] <- -5
+  Upr_lf[grep("init_rdev_a", names(obj_lf$par))] <-  5
+  Lwr_lf[grep("par_sel",     names(obj_lf$par))] <- -7
+  Upr_lf[grep("par_sel",     names(obj_lf$par))] <-  7
+
+  control  <- list(eval.max = 10000, iter.max = 10000)
+  start_fe <- Sys.time()
+  opt_lf <- nlminb(obj_lf$par, obj_lf$fn, obj_lf$gr, lower = Lwr_lf, upper = Upr_lf, control = control)
+  opt_lf <- nlminb(opt_lf$par, obj_lf$fn, obj_lf$gr, lower = Lwr_lf, upper = Upr_lf, control = control)
+  opt_lf <- nlminb(opt_lf$par, obj_lf$fn, obj_lf$gr, lower = Lwr_lf, upper = Upr_lf, control = control)
+  invisible(obj_lf$fn(opt_lf$par))
+  sdr_lf     <- RTMB::sdreport(obj_lf)
+  runtime_fe <- Sys.time() - start_fe
+}
+```
+
+```{r}
+#| label: re-fit
+#| echo: true
+#| results: hide
+if (!cache_hit) {
+  obj_re <- RTMB::MakeADFun(func = cmb(opal_model, data_lf),
+                            parameters = parameters, map = map_re,
+                            random = c("init_rdev_a", "rdev_y"), silent = TRUE)
+
+  # Only the fixed parameters (log_B0, log_cpue_q, freed par_sel, log_sigma_r)
+  # appear in obj_re$par; the random effects are marginalised.
+  Lwr_re <- rep(-Inf, length(obj_re$par)); Upr_re <- rep(Inf, length(obj_re$par))
+  Lwr_re[grep("log_B0",     names(obj_re$par))] <- log(1)
+  Upr_re[grep("log_B0",     names(obj_re$par))] <- log(exp(22))
+  Lwr_re[grep("log_cpue_q", names(obj_re$par))] <- log(0.001)
+  Upr_re[grep("log_cpue_q", names(obj_re$par))] <- log(10)
+  Lwr_re[grep("par_sel",    names(obj_re$par))] <- -7
+  Upr_re[grep("par_sel",    names(obj_re$par))] <-  7
+
+  start_re <- Sys.time()
+  opt_re <- nlminb(obj_re$par, obj_re$fn, obj_re$gr, lower = Lwr_re, upper = Upr_re, control = control)
+  opt_re <- nlminb(opt_re$par, obj_re$fn, obj_re$gr, lower = Lwr_re, upper = Upr_re, control = control)
+  invisible(obj_re$fn(opt_re$par))
+  sdr_re     <- RTMB::sdreport(obj_re)
+  runtime_re <- Sys.time() - start_re
+}
+```
+
+## Assemble and save the cache
+
+On a cache miss, the fitted models are simulated from and summarised into the
+plain-R `paka` bundle, which is then written to disk. Live `MakeADFun` objects
+are **not** stored: they hold external pointers to compiled AD tapes that do not
+round-trip through `saveRDS()`/`readRDS()` across sessions. Only plain-R
+results (the `sdreport` objects, `report()` lists, simulated CPUE draws, and
+convergence scalars) are cached.
+
+```{r}
+#| label: cache-save
+#| echo: true
+#| message: false
+if (!cache_hit) {
+  invisible(obj_lf$fn(opt_lf$par))
+  set.seed(124)
+  sims_cpue <- replicate(500, obj_lf$simulate()$cpue_log_obs)   # [obs x draws]
+
+  paka <- list(
+    par         = opt_lf$par,
+    par_re      = opt_re$par,
+    pdh         = isTRUE(sdr_lf$pdHess),
+    pdh_re      = isTRUE(sdr_re$pdHess),
+    mgc_sci     = formatC(max(abs(obj_lf$gr(opt_lf$par))), format = "e", digits = 2),
+    mgc_sci_re  = formatC(max(abs(obj_re$gr(opt_re$par))), format = "e", digits = 2),
+    runtime     = runtime_fe,
+    runtime_re  = runtime_re,
+    report      = obj_lf$report(),
+    report_re   = obj_re$report(),
+    sdreport    = sdr_lf,
+    sdreport_re = sdr_re,
+    sims_cpue   = sims_cpue,
+    ssb         = data.frame(
+      year     = calendar_years,
+      estimate = obj_lf$report()$spawning_biomass_y[seq_along(calendar_years)]
+    )
+  )
+
+  dir.create(dirname(paka_fit_path), recursive = TRUE, showWarnings = FALSE)
+  saveRDS(paka, paka_fit_path)
+}
+```
+
+## Convergence
+
+Both models converged without issues detected in the gradient or Hessian, and
+all parameters --- including `log_sigma_r` in the random-effects model --- were
+identifiable according to `check_estimability()` at fit time. Standard-error
+calculations completed quickly for both, and substantially faster than the
+reference SS3 fit (~6 minutes), though the random-effects model was slower than
+its fixed-effects counterpart.
+
+```{r}
+#| label: tbl-convergence
+#| echo: true
+#| message: false
+n_random <- length(parameters$init_rdev_a) + length(parameters$rdev_y)
+
+conv_tbl <- data.frame(
+  Metric = c("Positive-definite Hessian",
+             "Max |gradient|",
+             "Runtime (seconds)",
+             "N parameters (fixed)",
+             "N parameters (random)",
+             "sigma_R"),
+  opal = c(
+    as.character(paka$pdh),
+    paka$mgc_sci,
+    round(as.numeric(paka$runtime, units = "secs"), 1),
+    length(paka$par),
+    0L,
+    paste0(round(exp(as.numeric(parameters$log_sigma_r)), 2), " (fixed)")
+  ),
+  opal_re = c(
+    as.character(paka$pdh_re),
+    paka$mgc_sci_re,
+    round(as.numeric(paka$runtime_re, units = "secs"), 1),
+    length(paka$par_re),
+    n_random,
+    round(exp(unname(paka$par_re["log_sigma_r"])), 2)
+  ),
+  stringsAsFactors = FALSE
+)
+colnames(conv_tbl) <- c("Metric", "opal", "opal (RE)")
+
+knitr::kable(conv_tbl, booktabs = TRUE, align = c("l", "l", "l"))
+```
+
+# Cross-platform comparison
+
+## Estimated spawning biomass
+
+The figure compares `opal`'s estimated spawning-biomass trajectory (fixed and
+random effects, with 95% confidence intervals) against the SS3 operating-model
+truth (grey dashed) and the SS3 estimation model (navy dotted). `opal`
+reproduces the SS3 simulated trajectory, demonstrating that the internal
+population-dynamics engine is sound; the fixed- and random-effects estimates
+are close to one another.
+
+```{r}
+#| label: fig-paka-biomass
+#| echo: true
+#| message: false
+#| fig-cap: "'Opakapaka spawning biomass: opal fixed-effects (teal) and random-effects (blue) estimates with 95% intervals, against the SS3 operating-model truth (grey dashed) and SS3 estimation model (navy dotted)."
+#| fig-height: 4.5
+#| fig-width: 8
+data(opaka_truth)
+
+sbio_from_sdr <- function(sdr, label) {
+  v  <- sdr$value[names(sdr$value) == "spawning_biomass_y"][seq_along(calendar_years)]
+  se <- sdr$sd[   names(sdr$value) == "spawning_biomass_y"][seq_along(calendar_years)]
+  data.frame(model = label, year = calendar_years, value = v, se = se,
+             lo95 = v - 1.96 * se, hi95 = v + 1.96 * se)
+}
+
+paka_fe <- sbio_from_sdr(paka$sdreport,    "opal")
+paka_re <- sbio_from_sdr(paka$sdreport_re, "opal (RE)")
+
+om <- subset(opaka_truth$om$sprseries, Yr %in% calendar_years)
+em <- subset(opaka_truth$em$sprseries, Yr %in% calendar_years)
+
+ybmax <- max(paka_fe$hi95, paka_re$hi95, om$SSB, em$SSB, na.rm = TRUE)
+
+ggplot() +
+  geom_ribbon(data = paka_fe, aes(year, ymin = lo95, ymax = hi95, fill = model), alpha = 0.25) +
+  geom_ribbon(data = paka_re, aes(year, ymin = lo95, ymax = hi95, fill = model), alpha = 0.25) +
+  geom_line(data = paka_fe, aes(year, value, colour = "opal"),      linewidth = 1) +
+  geom_line(data = paka_re, aes(year, value, colour = "opal (RE)"), linewidth = 1) +
+  geom_line(data = om, aes(Yr, SSB, colour = "SS3 OM"), linewidth = 1, linetype = "dashed") +
+  geom_line(data = em, aes(Yr, SSB, colour = "SS3 EM"), linewidth = 1, linetype = "dotted") +
+  scale_colour_opal("Model", breaks = c("opal", "opal (RE)", "SS3 OM", "SS3 EM")) +
+  scale_fill_opal("Model",   breaks = c("opal", "opal (RE)", "SS3 OM", "SS3 EM")) +
+  labs(x = "Year", y = "Spawning biomass", colour = NULL) +
+  scale_y_continuous(limits = c(0, ybmax * 1.2)) +
+  theme_opal()
+```
+
+## Estimated selectivity
+
+Estimated selectivity-at-age for the three fleets under the fixed-effects
+model (from the cached `report()`). Comm and ResFish are informed directly by
+the length composition data; Non_comm retains its fixed SS3 selectivity.
+
+```{r}
+#| label: fig-paka-selex
+#| echo: true
+#| message: false
+#| fig-height: 4
+#| fig-width: 10
+#| fig-cap: Estimated selectivity-at-age by fleet (fixed-effects model).
+sel_fya <- paka$report$sel_fya
+
+sel_df <- expand.grid(fishery = seq_len(data$n_fishery), age = seq_len(data$n_age))
+sel_df$selectivity <- mapply(function(f, a) sel_fya[f, 1, a], sel_df$fishery, sel_df$age)
+sel_df$age_real <- data$age_a[sel_df$age]
+sel_df$fleet    <- fleet_names[sel_df$fishery]
+
+ggplot(sel_df, aes(age_real, selectivity)) +
+  geom_line(colour = opal_cols["teal"], linewidth = 1) +
+  facet_wrap(~fleet, ncol = 3) +
+  labs(x = "Age", y = "Selectivity") +
+  ylim(0, 1) +
+  theme_opal()
+```
+
+## Length composition fits
+
+Observed length compositions (grey bars) with fixed-effects model predictions
+(teal), for a decadal subset of Comm years and all ResFish years. Predictions
+are taken from the cached `report()$lf_pred`.
+
+```{r}
+#| label: fig-paka-lf-fit
+#| echo: true
+#| message: false
+#| fig-height: 6
+#| fig-width: 9
+#| fig-cap: Length-composition fits for the commercial (decadal subset) and research (all years) fleets.
+lf_pred <- paka$report$lf_pred
+names(lf_pred) <- data_lf$lf_fishery_f
+for (k in seq_along(lf_pred)) colnames(lf_pred[[k]]) <- data_lf$len_mid
+
+lf_year_list <- split(data_lf$lf_year, data_lf$lf_fishery)
+
+df_pred <- map_dfr(seq_along(lf_pred), function(i) {
+  m   <- lf_pred[[i]]
+  yrs <- lf_year_list[[i]]
+  as.data.frame.table(m, responseName = "pred", stringsAsFactors = FALSE) %>%
+    rename(id = Var1, length = Var2) %>%
+    mutate(fishery = as.character(names(lf_pred)[i]),
+           id      = as.integer(factor(id, levels = unique(id))),
+           year    = yrs[id],
+           length  = as.numeric(length))
+})
+
+df_obs <- data.frame(data_lf$lf_obs_in)
+names(df_obs) <- data_lf$len_mid
+df_obs <- df_obs %>%
+  mutate(year = data_lf$lf_year, fishery = as.character(data_lf$lf_fishery)) %>%
+  group_by(fishery) %>% mutate(id = row_number()) %>% ungroup() %>%
+  pivot_longer(cols = -c(year, fishery, id), names_to = "length", values_to = "obs") %>%
+  mutate(length = as.numeric(length))
+
+df_lf <- left_join(df_obs, df_pred, by = c("id", "fishery", "length")) %>%
+  select(-year.y) %>% rename(year = year.x) %>%
+  mutate(cal_year = 1948L + year)
+
+plot_lf <- function(fleet_id, ncol, subtitle) {
+  yrs <- if (fleet_id == "1") {
+    seq(min(data_lf$lf_year[data_lf$lf_fishery == 1]),
+        max(data_lf$lf_year[data_lf$lf_fishery == 1]), by = 10L)
+  } else {
+    sort(unique(data_lf$lf_year[data_lf$lf_fishery == as.integer(fleet_id)]))
+  }
+  ggplot(df_lf %>% filter(fishery == fleet_id, year %in% yrs), aes(length)) +
+    geom_col(aes(y = obs), fill = opal_cols["obs"], width = 2) +
+    geom_line(aes(y = pred), colour = opal_cols["teal"], linewidth = 0.8) +
+    facet_wrap(~cal_year, scales = "free_y", ncol = ncol) +
+    labs(x = "Length (cm)", y = "Proportion", subtitle = subtitle) +
+    theme_opal() +
+    theme(strip.text = element_text(size = 7), axis.text = element_text(size = 6))
+}
+
+print(plot_lf("1", 5, "Comm (fleet 1, decadal subset)"))
+print(plot_lf("3", 4, "ResFish (fleet 3, all years)"))
+```
+
+# Posterior-predictive checks
+
+`RTMB`'s `simulate()` function generated the cached CPUE draws
+(`paka$sims_cpue`) from the fitted model. These simulated datasets can be refit
+within the model (simulation self-testing) or used to generate
+posterior-predictive distributions for the observed data. Using the commercial
+fishery index as an example, the observed CPUE tends to fall within the
+posterior-predictive distribution (panels A and B). The PIT ECDF (panel C),
+however, indicates the predictions are over-dispersed relative to the
+observations. This is expected: the commercial index was generated with
+negligible observation error, whereas `simulate()` draws incorporate the full
+uncertainty (observation *and* process error) of the estimated model.
+
+```{r}
+#| label: fig-paka-cpue-ppc
+#| echo: true
+#| message: false
+#| warning: false
+#| fig-cap: "Posterior-predictive checks for the 'opakapaka commercial CPUE index (fishery 1). Simulated replicates in aqua, observations in dark teal. Left to right: replicate trajectories, density overlay, and PIT ECDF calibration check."
+#| fig-height: 7
+#| fig-width: 9
+nsims_traj <- 50L
+sims_cpue  <- paka$sims_cpue   # [obs x draws]
+
+# bayesplot's 6 scheme slots run light -> dark:
+opal_sim <- "#7DD2DB"   # simulated replicates (aqua)
+opal_obs <- "#0E4049"   # observed (dark teal)
+color_scheme_set(c(opal_sim, "#5EBFCB", "#27A7BE", "#1F8B9E", "#155F6B", opal_obs))
+
+idx  <- which(data$cpue_data$fishery == 1)
+y    <- log(data$cpue_data$value[idx])       # observed, log units
+yrep <- t(as.matrix(sims_cpue[idx, ]))       # [draws x obs]
+
+# guard against NA columns (years without CPUE) that break density estimation
+ok   <- stats::complete.cases(t(yrep)) & !is.na(y)
+y    <- y[ok]
+yrep <- yrep[, ok, drop = FALSE]
+stopifnot(ncol(yrep) == length(y))
+
+set.seed(1)
+draws <- sample(nrow(yrep), min(nsims_traj, nrow(yrep)))
+
+p_dens <- ppc_dens_overlay(y, yrep[draws, , drop = FALSE]) +
+  ggtitle("CPUE density overlay") + xlab("log(CPUE)") + ylab("Density") + theme_opal()
+
+p_pit <- ppc_pit_ecdf(y, yrep) +
+  ggtitle("PIT ECDF") + theme_opal()
+
+mle_sims <- as.data.frame(sims_cpue[idx, ]) %>%
+  pivot_longer(cols = everything(), names_to = "sim", values_to = "cpue") %>%
+  filter(sim %in% sample(unique(sim), nsims_traj))
+mle_sims$x <- sort(rep(data$cpue_data$year[idx], nsims_traj))
+
+p_traj <- ggplot() +
+  geom_line(data = mle_sims, aes(x = x, y = cpue, group = sim),
+            colour = opal_sim, alpha = 0.4) +
+  geom_line(data = data$cpue_data[idx, ], aes(x = year, y = log(value)),
+            colour = opal_obs, linewidth = 1.5) +
+  labs(x = "Year", y = "log(CPUE)") +
+  ggtitle("CPUE trajectories") + theme_opal()
+
+p_traj + p_dens + p_pit + plot_annotation(tag_levels = "A")
+```
+
+# Next steps
+
+This vignette covers configuration, fitting, cross-platform benchmarking, and
+posterior-predictive checking for the fixed- and random-effects `opal (with LF)`
+models. The projection and Bayesian (MCMC) workflows built on the fitted
+fixed-effects model --- constant-catch projection with MVN and MCMC uncertainty
+propagation --- are carried forward in
+`vignette("projections_opakapaka")`, which reuses the same model as its
+starting point.

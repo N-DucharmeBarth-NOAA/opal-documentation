@@ -23,6 +23,11 @@ listing:
           description: >
             WCPFC Scientific Committee working paper describing opal's architecture and the two case studies.
           display-order: 1
+        - path: assets/opakapaka.html
+          title: "Opakapaka case study"
+          description: >
+            Vignette which configures, fits, and cross-platform benchmarks an `opal` stock assessment model for 'opakapaka.
+          display-order: 1
     sort: "display-order"
 
 header-includes: >
@@ -87,4 +92,4 @@ opal is under active development. The case studies presented here are illustrati
 
 ## Contact
 
-For questions about opal, open an issue <https://github.com/N-DucharmeBarth-NOAA/opal/issues>.
+For questions about opal, open an issue on GitHub: <https://github.com/N-DucharmeBarth-NOAA/opal/issues>.
