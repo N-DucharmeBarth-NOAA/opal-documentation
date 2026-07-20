@@ -1,7 +1,0 @@
-"group","old_fisheries","catch_units","sel_type","total_catch","percent"
-1,"8",1,"double-normal",1609141.772,61.4280922558624
-2,"10",1,"double-normal",387148.6,14.7791825004764
-3,"9,12,13,14",1,"double-normal",491644.468,18.7682541482047
-4,"11",1,"logistic",34070,1.3006033026885
-5,"1,2,3,4,5,6,7",2,"double-normal",97548.711,3.72386779276802
-6,"15",2,"logistic",0,0

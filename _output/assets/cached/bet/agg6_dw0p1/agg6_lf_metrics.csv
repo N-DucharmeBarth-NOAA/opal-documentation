@@ -1,5 +1,0 @@
-"combo","fishery","lf_prop_rmse","lf_prop_mae","lf_mean_length_rmse","lf_mean_length_bias","sel_est_nat","bound_status"
-"agg6_full_g5_lfwf0p1",1,0.0179429649092243,0.00688461028042084,5.65998631404984,-3.12780687748388,"peak_cm=57.4036,asc_denom_cm2=57.6033,desc_denom_cm2=86.2198","peak=free"
-"agg6_full_g5_lfwf0p1",2,0.0271729796905778,0.00936107280875356,6.96732706982723,-2.93479630339793,"peak_cm=34.3797,asc_denom_cm2=72.0435,desc_denom_cm2=229.9077","peak=free;desc_width=free"
-"agg6_full_g5_lfwf0p1",3,0.0322410711541428,0.0110067222291675,11.0700677609388,-1.70619584265531,"peak_cm=65.1564,asc_denom_cm2=225.7643,desc_denom_cm2=88.1107","peak=free;desc_width=free"
-"agg6_full_g5_lfwf0p1",4,0.0214490059905206,0.00953323393219052,12.5191362185677,4.73820535120112,"inflection_cm=140.9202,width95_cm=45.4042","peak=free;plateau=free"

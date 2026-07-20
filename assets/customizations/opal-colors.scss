@@ -1,5 +1,5 @@
 /*-- scss:defaults --*/
-// opal color palette (teal / gold) with tints and shades.
+// opal color palette (blue / gold) with tints and shades.
 //
 // This is a drop-in replacement for noaa-colors.scss: it keeps the SAME
 // variable and CSS-custom-property names (blue-*, orange-*, accent-*, gray-*,
@@ -10,38 +10,39 @@
 // noaa-colors.scss / noaa-light.scss.
 
 // opal brand anchors
-$opal-teal:  #27A7BE; // primary (logo teal)
+$opal-blue:  #003087; // primary (logo dark blue)
+$opal-teal:  #27A7BE; // secondary accent teal
 $opal-gold:  #FCCF43; // logo gold — fails WCAG as text, so used only for fills
 $opal-coral: #D92208; // warm secondary accent
-$opal-navy:  #013282; // deep blue accent
+$opal-navy:  #001f59; // deeper blue accent
 
 // Brand aliases (kept for compatibility with the light/dark theme files that
 // reference $noaa-* names). Values are opal-appropriate, not NOAA.
-$noaa-background:    #eaf6f8; // pale teal
+$noaa-background:    #eef3fb; // pale blue
 $noaa-whale-gray:    #323C46;
-$noaa-midnight-sky:  #0e3a42; // deep teal — used as heading color
-$noaa-twilight-sky:  #10434c;
-$noaa-sky:           #176472;
-$noaa-sea:           $opal-teal;  // #27A7BE
-$noaa-pale-sea:      #cbe8ee;
+$noaa-midnight-sky:  #001c52; // deep blue — used as heading color
+$noaa-twilight-sky:  #002364;
+$noaa-sky:           #002a76;
+$noaa-sea:           $opal-blue; // #003087
+$noaa-pale-sea:      #d6e3fb;
 $noaa-dove-gray:     #A5AAAF;
 $noaa-orange:        #c88a00; // deep gold (contrast-safe accent)
 $noaa-moby-blue:     $opal-coral;
 $noaa-black:         #000000;
 $noaa-white:         #ffffff;
 
-// Primary ramp (teal) — mapped onto the blue-* names used across the theme
-$blue-100: #eef8fa;
-$blue-95:  #e2f3f6;
-$blue-90:  #cbe8ee;
-$blue-80:  #9dd7e2;
-$blue-70:  #70c7d6;
-$blue-60:  #46b6c9;
-$blue-50:  $opal-teal; // #27A7BE
-$blue-40:  #1f8698;
-$blue-30:  #176472;
-$blue-20:  #10434c;
-$blue-10:  #082226;
+// Primary ramp (blue) — mapped onto the blue-* names used across the theme
+$blue-100: #f2f6fd;
+$blue-95:  #e7eefb;
+$blue-90:  #d6e3fb;
+$blue-80:  #adc7f5;
+$blue-70:  #7fa6ec;
+$blue-60:  #4f83de;
+$blue-50:  $opal-blue; // #003087
+$blue-40:  #002a76;
+$blue-30:  #002364;
+$blue-20:  #001c52;
+$blue-10:  #00123a;
 
 // Grays (unchanged, neutral)
 $gray-100: #f8f9fa;
@@ -90,7 +91,7 @@ $info:    $blue-50;
 
 /*-- scss:rules --*/
 :root {
-  // Blue (teal) palette
+  // Blue palette
   --blue-100: #{$blue-100};
   --blue-95: #{$blue-95};
   --blue-90: #{$blue-90};
@@ -143,6 +144,7 @@ $info:    $blue-50;
   // opal-specific colors
   --opal-background: #{$noaa-background};
   --opal-pale-sea: #{$noaa-pale-sea};
+  --opal-blue: #{$opal-blue};
   --opal-teal: #{$opal-teal};
   --opal-gold: #{$opal-gold};
   --opal-coral: #{$opal-coral};

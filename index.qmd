@@ -70,7 +70,7 @@ resources:
 
 ::: {.callout-note}
 ## Development status
-opal is under active development (proof of concept, version 0.0.3). The case studies presented here are illustrative and are **not** intended to inform management advice.
+opal is under active development. The case studies presented here are illustrative and are **not** intended to inform management advice.
 :::
 
 ## Quick links {#resources}
