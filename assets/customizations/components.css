@@ -389,13 +389,15 @@
    If a file is missing the frosted overlay still renders as a light card, so
    these are optional. Order matches the listing in index.qmd. */
 .g-col-1:nth-child(1) .quarto-grid-item {
+  background-image: url('../images/opal-sc22.png');
+}
+
+   .g-col-1:nth-child(2) .quarto-grid-item {
   background-image: url('../images/opakapaka.png');
 }
 
-.g-col-1:nth-child(2) .quarto-grid-item {
+.g-col-1:nth-child(3) .quarto-grid-item {
   background-image: url('../images/bet.png');
 }
 
-.g-col-1:nth-child(3) .quarto-grid-item {
-  background-image: url('../images/opal-sc22.png');
-}
+

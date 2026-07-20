@@ -4,7 +4,7 @@ page-layout: full
 title-block-banner: false
 format:
   html:
-    toc: true
+    toc: false
 
 listing:
   - id: resource-listing
@@ -41,7 +41,7 @@ resources:
 
     <div class="species-info">
       <h2 class="site-subtitle text-secondary mt-0 fw-lighter text-center text-sm-start">
-        the open population assessment library
+        the <span class="opal-brand">o</span>pen <span class="opal-brand">p</span>opulation <span class="opal-brand">a</span>ssessment <span class="opal-brand">l</span>ibrary
       </h2>
     </div>
 

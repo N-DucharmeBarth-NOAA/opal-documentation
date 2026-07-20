@@ -14,13 +14,18 @@
   min-width: 0;
 }
 
+:root {
+  --hero-title-subtitle-gap: 4px;
+}
+
 .site-title {
   font-size: clamp(2rem, 5vw, 3.5rem);
   max-width: 800px;
   display: block;
   color: var(--blue-20);
   font-weight: 300;
-  line-height: 1.2;
+  line-height: 1;
+  margin: 0;
 }
 
 .site-subtitle {
@@ -29,11 +34,14 @@
   display: block;
   color: var(--blue-40);
   font-style: italic;
-  margin-bottom: 1.5rem;
+  line-height: 1.05;
+  margin: 0;
+  border-bottom: 0;
+  padding-bottom: 0;
 }
 
 .species-info {
-  margin: 1rem 0;
+  margin: var(--hero-title-subtitle-gap) 0 0.75rem;
 }
 
 .social-icon-links {
