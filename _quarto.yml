@@ -22,8 +22,10 @@ website:
     right:
       - text: "Home"
         href: index.qmd
-      - text: "SC22 paper"
-        href: assets/opal-sc22-wp.html
+      - text: "Quick links"
+        menu:
+          - text: "SC22 working paper"
+            href: assets/opal-sc22-wp.html
       - text: "Package docs"
         href: https://n-ducharmebarth-noaa.github.io/opal/
       - icon: github
