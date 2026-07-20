@@ -16,18 +16,16 @@ listing:
     filter-ui: false
     fields: [title, description]
     contents:
-        # TODO: point these at the rendered case-study / paper HTML once they are
-        # copied into assets/ (or convert them to in-project .qmd pages).
         - path: assets/opal-sc22-wp.html
           title: "SC22 working paper"
           description: >
             WCPFC Scientific Committee working paper describing opal's architecture and the two case studies.
           display-order: 1
         - path: assets/opakapaka.html
-          title: "Opakapaka case study"
+          title: "'Opakapaka case study"
           description: >
             Vignette which configures, fits, and cross-platform benchmarks an `opal` stock assessment model for 'opakapaka.
-          display-order: 1
+          display-order: 2
     sort: "display-order"
 
 header-includes: >
@@ -66,7 +64,6 @@ resources:
 
   <div class="site-logo">
     <div class="logo-container">
-      <!-- TODO: add assets/images/opal-hex.png -->
       <img src="assets/static/opal-HEX-transparent.png" alt="opal hex logo" class="noaa-logo">
     </div>
   </div>

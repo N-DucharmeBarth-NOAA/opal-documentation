@@ -7,15 +7,12 @@ project:
 
 website:
   title: "opal"
-  # TODO: confirm the deployment URL for this documentation site.
-  site-url: https://n-ducharmebarth-noaa.github.io/opal-documentation/
-  # TODO: confirm the repo that *hosts this site* (docs repo, not the package repo).
+  site-url: https://connect.fisheries.noaa.gov/opal/
   repo-url: https://github.com/N-DucharmeBarth-NOAA/opal-documentation
   repo-actions: [source, edit, issue]
 
   navbar:
     title: "opal"
-    # TODO: drop the opal hex logo in as assets/images/opal-hex.png
     logo: "assets/static/opal-HEX-transparent.png"
     logo-alt: "opal hex logo"
     background: light
