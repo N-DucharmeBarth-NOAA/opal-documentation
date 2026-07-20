@@ -1,0 +1,3431 @@
+---
+title: "opal: the open population assessment library"
+date: last-modified
+date-format: "DD MMMM YYYY"
+author:
+  - name: "N. Ducharme-Barth"
+    affiliations:
+      - id: pifsc
+        name: "NOAA Fisheries, Pacific Islands Fisheries Science Center, 1845 Wasp Boulevard, Bldg. 176, Honolulu HI 96818"
+  - name: "D. Webber"
+    affiliations:
+      - id: quantifish
+        name: "Quantifish Limited, Tauranga, New Zealand"
+  - name: "P. Neubauer"
+    affiliations:
+      - id: dragonfly
+        name: "Dragonfly Data Science, Wellington, New Zealand"
+  - name: "K. Kim"
+    affiliations:
+      - id: spc
+        name: "Oceanic Fisheries Programme, Pacific Community, Noumea, New Caledonia"
+  - name: "A. Magnusson"
+    affiliations:
+      - ref: spc
+  - name: "P. Hamer"
+    affiliations:
+      - ref: spc
+meetingtype: "SCIENTIFIC COMMITTEE"
+meetingnumber: "TWENTY-SECOND REGULAR SESSION"
+meetinglocation: "Apia, Samoa"
+meetingdates: "11-19 August 2026"
+repnumber: WCPFC-SC22-2026/SA-WP-02
+format:
+  pdf:
+    pdf-engine: pdflatex
+    template-partials:
+      - before-body.tex
+    documentclass: SCreport
+    fontsize: 11pt
+    geometry:
+      - margin=1in
+    toc: true
+    number-sections: true
+    link-citations: true
+    colorlinks: true
+    linkcolor: SCblue
+    filecolor: SCblue
+    urlcolor: SCblue
+    citecolor: SCblue
+    toccolor: SCblue
+    highlight-style: github
+    code-block-bg: "#f6f8fa"
+    code-block-border-left: "#c5c5c5"
+    code-font: "Consolas, Monaco, 'Andale Mono', monospace"
+    filters:
+      - inline-code.lua
+    header-includes: |
+     \usepackage{pdflscape}
+     \providecommand{\citeproc}[2]{#2}
+  html:
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    link-citations: true
+    colorlinks: true
+    highlight-style: github
+    self-contained: true
+execute:
+  warning: false
+  message: false
+bibliography: opal.bib
+csl: apa.csl
+
+---
+
+```{r}
+#| label: setup-opal
+#| include: false
+# renv::restore(prompt = FALSE)   # optional: reproduce library from renv.lock
+
+extra_r_libs <- Sys.getenv("OPAL_EXTRA_R_LIBS", unset = "")
+extra_r_lib_paths <- if (nzchar(extra_r_libs)) {
+  strsplit(extra_r_libs, .Platform$path.sep, fixed = TRUE)[[1]]
+} else {
+  character()
+}
+r_minor <- strsplit(R.version$minor, ".", fixed = TRUE)[[1]][1]
+default_user_lib <- file.path(
+  path.expand("~"),
+  "R",
+  paste0(R.version$platform, "-library"),
+  paste(R.version$major, r_minor, sep = ".")
+)
+extra_r_lib_paths <- unique(c(extra_r_lib_paths, default_user_lib))
+extra_r_lib_paths <- extra_r_lib_paths[dir.exists(extra_r_lib_paths)]
+if (length(extra_r_lib_paths)) .libPaths(c(extra_r_lib_paths, .libPaths()))
+
+library(opal)    # pinned to commit 5f4e10fe via renv.lock
+library(RTMB)
+library(tidyverse)
+library(SparseNUTS)
+library(posterior)
+library(bayesplot)
+library(patchwork)
+
+```
+
+```{r}
+#| label: setup-palette
+#| include: false
+
+## opal palette -------------------------------------------------------------
+## Colours sampled from the opal logo.
+opal_cols <- c(
+  navy  = "#013282", ocean = "#064E8F", midblue = "#066AA7", blue  = "#0181C3",
+  teal  = "#27A7BE", aqua  = "#7DD2DB", gold    = "#FCCF43", coral = "#D92208",
+  truth = "#4D4D4D", obs   = "#B3B3B3", struct  = "#8C8C8C"
+)
+
+## model dimension: every label variant used in the paper -> a fixed colour
+opal_models <- c(
+  "opal"           = unname(opal_cols["teal"]),
+  "opal (with LF)" = unname(opal_cols["teal"]),
+  "opal estimate"  = unname(opal_cols["teal"]),
+  "opal (RE)"      = unname(opal_cols["midblue"]),
+  "15-fishery opal" = unname(opal_cols["teal"]),
+  "6-fishery opal" = unname(opal_cols["gold"]),
+  "SS3"            = unname(opal_cols["navy"]),
+  "SS3 EM"         = unname(opal_cols["navy"]),
+  "SS3 reference"  = unname(opal_cols["navy"]),
+  "SS3 OM"         = unname(opal_cols["truth"]),
+  "MFCL"           = unname(opal_cols["coral"])
+)
+
+## name-keyed, so a model keeps its colour regardless of which others are present.
+## `breaks` (set per figure) controls legend order/inclusion.
+scale_colour_opal <- function(...) ggplot2::scale_colour_manual(values = opal_models, ...)
+scale_fill_opal   <- function(...) ggplot2::scale_fill_manual(values = opal_models, ...)
+
+## data / observation roles
+opal_role <- c(
+  observed  = unname(opal_cols["obs"]),
+  fitted    = unname(opal_cols["teal"]),
+  simulated = unname(opal_cols["aqua"])
+)
+
+## diverging residual scale
+scale_fill_opal_resid <- function(name = "Mean OSA residual", limits = c(-4, 4), ...) {
+  ggplot2::scale_fill_gradient2(
+    low = unname(opal_cols["ocean"]), mid = "#F7F7F7", high = unname(opal_cols["coral"]),
+    midpoint = 0, limits = limits, oob = scales::squish, name = name, ...
+  )
+}
+
+## projection-method sub-palette (NOT the model dimension)
+opal_proj <- c(MVN = unname(opal_cols["blue"]), MCMC = "#E0A82E")
+
+## MCMC chain identity is nominal -> qualitative CVD-safe set (Okabe-Ito)
+opal_chains <- c("#000000", "#E69F00", "#56B4E9", "#009E73",
+                 "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+## shared theme (replaces the per-figure theme_minimal() calls)
+theme_opal <- function(base_size = 11, base_family = "") {
+  ggplot2::theme_minimal(base_size = base_size, base_family = base_family) +
+    ggplot2::theme(
+      legend.position  = "bottom",
+      panel.grid.minor = ggplot2::element_blank(),
+      strip.background = ggplot2::element_blank()
+    )
+}
+theme_set(theme_opal())
+```
+
+```{r}
+#| label: paka-lf-fit
+#| echo: false
+#| results: hide
+
+## ---- Cache location ------------------------------------------------------
+# Anchor to the document's own directory when available. Quarto's execution
+# directory can vary, so check the cache locations that occur when rendering
+# from either the document directory or the project root.
+doc_dir <- tryCatch(
+  dirname(knitr::current_input(dir = TRUE)),
+  error = function(e) "."
+)
+paka_fit_candidates <- c(
+  file.path(doc_dir, "cached", "opakapaka", "opal_lf-re_fit.rds"),
+  file.path(doc_dir, "assets", "cached", "opakapaka", "opal_lf-re_fit.rds"),
+  file.path(getwd(), "cached", "opakapaka", "opal_lf-re_fit.rds"),
+  file.path(getwd(), "assets", "cached", "opakapaka", "opal_lf-re_fit.rds")
+)
+paka_fit_path <- paka_fit_candidates[file.exists(paka_fit_candidates)][1]
+paka_cache_dir <- if (is.na(paka_fit_path)) {
+  file.path(doc_dir, "cached", "opakapaka")
+} else {
+  dirname(paka_fit_path)
+}
+dir.create(paka_cache_dir, recursive = TRUE, showWarnings = FALSE)
+if (is.na(paka_fit_path)) {
+  paka_fit_path <- file.path(paka_cache_dir, "opal_lf-re_fit.rds")
+}
+
+## ---- Fit + diagnostics (fully cached) ------------------------------------
+# On a cache hit nothing from opal/RTMB is rebuilt: the document consumes only
+# the plain-R results bundle (`paka`). The model is built, fitted, and
+# summarised solely when the cache is absent. (R ignores indentation, so the
+# pipeline below is left un-indented inside the else for a smaller diff.)
+if (file.exists(paka_fit_path)) {
+  paka <- readRDS(paka_fit_path)
+} else {
+
+## ---- Data ----------------------------------------------------------------
+data(opaka_data)
+data <- opaka_data
+if (is.null(data$n_index)) data$n_index <- 2L
+data$priors <- NULL
+
+# SS3 indexes ages 0--43; anchor the Schnute growth curve at biological age 0.
+data$A1      <- 0
+data$A2      <- data$A1 + (data$n_age - 1)
+data$min_age <- 0
+data$age_a   <- seq(data$min_age, by = 1, length.out = data$n_age)
+
+# Sex ratio set to 1 at all ages (B0 is already female-only spawning biomass).
+data$sex_ratio <- rep(1, data$n_age)
+
+## ---- Length composition data ---------------------------------------------
+data(opaka_lf)
+lf_wide <- opaka_lf %>%
+  tidyr::pivot_wider(
+    id_cols     = c(fishery, year, month, ts),
+    names_from  = bin,
+    values_from = value,
+    values_fill = 0
+  ) %>%
+  arrange(fishery, ts)
+
+var_adjust_scalars <- 1 / rep(1, data$n_fishery)
+data <- prep_lf_data(data, lf_wide,
+                     lf_keep_fisheries = c(1, 3),   # Comm + ResFish
+                     lf_var_adjust     = var_adjust_scalars,
+                     lf_addtocomp      = 1e-10)
+
+## ---- SS3-style recruitment bias-adjustment ramps -------------------------
+init_cohort_years <- 1949 - (data$age_a - 1)
+data$init_bias_adj_a <- get_bias_adj_vector(
+  years            = init_cohort_years,
+  do_rec_bias_ramp = 1,
+  bias_years       = c(1931, 1974, 2021.88, 2022.43),
+  max_bias_adj     = 0.869
+)
+
+calendar_years <- (1949 - 1) + data$years   # 1949--2023
+data$bias_adj_y <- get_bias_adj_vector(
+  years            = calendar_years,
+  do_rec_bias_ramp = 1,
+  bias_years       = c(1931, 1974, 2021.88, 2022.43),
+  max_bias_adj     = 0.869
+)
+
+## ---- Parameters ----------------------------------------------------------
+data(opaka_parameters)
+
+# 1949 dev seeds the initial age-0 cohort; later years shift into rdev_y.
+init_rdev_a <- rev(c(
+  0.0206807, 0.00321579, 0.00372620, 0.0043174, 0.00500263, 0.00579674,
+  0.00671727, 0.00778422, 0.00902081, 0.0104539, 0.0121143, 0.0140375,
+  0.0162641, 0.0188404, 0.0218182, 0.0252561, 0.0292182, 0.0337726,
+  0.0389898, 0.0449362, 0.0516662, 0.0592049, 0.0675236, 0.0764992,
+  0.0858443, 0.0950047, 0.102706, 0.107687, 0.107712, 0.0998349,
+  0.0808137, 0.0482339, 0.00234443, -0.0517563, -0.102395, -0.131458,
+  -0.121101, -0.0714826, -0.00742166, -0.0109308, -0.0385029, 0.0366483,
+  0.0165105, -0.166906
+))
+init_rdev_a[1] <- opaka_parameters$rdev_y[1]
+rdev_y_shifted <- c(opaka_parameters$rdev_y[2:length(opaka_parameters$rdev_y)], 0.0)
+
+parameters <- list(
+  log_B0         = 9,
+  log_h          = as.numeric(opaka_parameters$log_h),
+  log_sigma_r    = as.numeric(opaka_parameters$log_sigma_r),
+  log_cpue_q     = as.numeric(opaka_parameters$log_cpue_q),
+  log_cpue_tau   = rep(log(0.1), data$n_index),
+  log_cpue_omega = as.numeric(rep(opaka_parameters$log_cpue_omega, data$n_index)),
+  log_lf_tau     = as.numeric(log(rep(0.1, data$n_fishery))),
+  log_L1         = as.numeric(opaka_parameters$log_L1),
+  log_L2         = as.numeric(opaka_parameters$log_L2),
+  log_k          = as.numeric(opaka_parameters$log_k),
+  log_CV1        = as.numeric(opaka_parameters$log_CV1),
+  log_CV2        = as.numeric(opaka_parameters$log_CV2),
+  par_sel        = as.matrix(opaka_parameters$par_sel),
+  log_init_F_f   = c(log(0.0119122), rep(log(1e-8), data$n_fishery - 1)),
+  rdev_y         = rdev_y_shifted,
+  init_rdev_a    = init_rdev_a
+)
+parameters$par_sel <- convert_ss3_selex_to_rtmb(
+  parameters$par_sel, data$sel_type_f, data$len_mid
+)
+
+## ---- Priors --------------------------------------------------------------
+data$priors <- get_priors(parameters = parameters, data = data)
+
+## ---- Base map ------------------------------------------------------------
+map_sel_base    <- as.vector(matrix(NA, nrow(parameters$par_sel),
+                                     ncol(parameters$par_sel)))
+map_lf_tau_base <- rep(NA, length(parameters$log_lf_tau))
+
+map <- list(
+  log_h          = factor(NA),
+  log_sigma_r    = factor(NA),
+  log_cpue_tau   = as.factor(rep(NA, data$n_index)),
+  log_cpue_omega = as.factor(rep(NA, data$n_index)),
+  log_lf_tau     = factor(map_lf_tau_base),
+  log_L1         = factor(NA),
+  log_L2         = factor(NA),
+  log_k          = factor(NA),
+  log_CV1        = factor(NA),
+  log_CV2        = factor(NA),
+  par_sel        = factor(map_sel_base),
+  log_init_F_f   = rep(factor(NA), data$n_fishery),
+  init_rdev_a    = as.factor(seq_len(data$n_age)),
+  rdev_y         = as.factor(seq_len(length(parameters$rdev_y)))
+)
+
+## ---- opal (with LF): data, map, AD object --------------------------------
+# Turn on the multinomial length-composition likelihood and free selectivity
+# for the two fleets with LF data (Comm: two logistic params; ResFish: three
+# of the six double-normal params). CPUE remains in the likelihood.
+data_lf <- data
+data_lf$sel_fa_external <- NULL    # estimate selectivity, no external override
+data_lf$lf_switch       <- 1L
+
+map_sel <- matrix(NA, nrow(parameters$par_sel), ncol(parameters$par_sel))
+map_sel[1, 1:2]       <- c(1, 2)         # Comm (fleet 1) logistic
+map_sel[3, c(1, 4, 6)] <- c(3, 4, 5)     # ResFish (fleet 3) double-normal
+map_sel <- as.vector(map_sel)
+
+map_lf <- map
+map_lf$par_sel <- factor(map_sel)
+
+start_time <- Sys.time()
+obj_lf <- MakeADFun(func = cmb(opal_model, data_lf),
+                    parameters = parameters,
+                    map        = map_lf)
+stopifnot(is.finite(obj_lf$fn()))
+
+## ---- Parameter bounds ----------------------------------------------------
+Lwr_lf <- rep(-Inf, length(obj_lf$par))
+Upr_lf <- rep( Inf, length(obj_lf$par))
+Lwr_lf[grep("log_B0",      names(obj_lf$par))] <- log(1)
+Upr_lf[grep("log_B0",      names(obj_lf$par))] <- log(exp(22))
+Lwr_lf[grep("log_cpue_q",  names(obj_lf$par))] <- log(0.001)
+Upr_lf[grep("log_cpue_q",  names(obj_lf$par))] <- log(10)
+Lwr_lf[grep("rdev_y",      names(obj_lf$par))] <- -5
+Upr_lf[grep("rdev_y",      names(obj_lf$par))] <-  5
+Lwr_lf[grep("init_rdev_a", names(obj_lf$par))] <- -5
+Upr_lf[grep("init_rdev_a", names(obj_lf$par))] <-  5
+Lwr_lf[grep("par_sel",     names(obj_lf$par))] <- -7
+Upr_lf[grep("par_sel",     names(obj_lf$par))] <-  7
+
+## ---- Fit: three-pass nlminb ----------------------------------------------
+
+control <- list(eval.max = 10000, iter.max = 10000)
+opt_lf <- nlminb(start = obj_lf$par, objective = obj_lf$fn,
+                 gradient = obj_lf$gr, lower = Lwr_lf, upper = Upr_lf,
+                 control = control)
+opt_lf <- nlminb(start = opt_lf$par, objective = obj_lf$fn,
+                 gradient = obj_lf$gr, lower = Lwr_lf, upper = Upr_lf,
+                 control = control)
+opt_lf <- nlminb(start = opt_lf$par, objective = obj_lf$fn,
+                 gradient = obj_lf$gr, lower = Lwr_lf, upper = Upr_lf,
+                 control = control)
+invisible(obj_lf$fn(opt_lf$par))   # set last.par to the MLE
+
+
+## ---- Convergence diagnostics ---------------------------------------------
+sdr_lf   <- RTMB::sdreport(obj_lf)
+end_time <- Sys.time()
+paka_runtime <- end_time - start_time
+
+paka_mgc <- max(abs(obj_lf$gr(opt_lf$par)))
+# Estimability is the convergence criterion (in place of opt_lf$convergence);
+# capture the full return so it is cached and re-printed verbatim in BLOCK C.
+invisible(obj_lf$fn(opt_lf$par))
+estim    <- tryCatch(check_estimability(obj = obj_lf), error = function(e) e)
+
+paka_iterations <- opt_lf$iterations
+paka_fn_evals   <- opt_lf$evaluations[1]
+paka_gr_evals   <- opt_lf$evaluations[2]
+
+invisible(obj_lf$fn(opt_lf$par))
+paka_hess = optimHess(par = opt_lf$par, fn = obj_lf$fn, gr = obj_lf$gr)
+paka_hess_eigen_values <- eigen(paka_hess)$values
+
+## ---- Estimated spawning biomass + SS3 OM / EM ----------------------------
+rep_lf <- obj_lf$report()
+data(opaka_truth)
+
+## ---- simulate ------------------------------------------------------------
+n_sims <- 500
+
+invisible(obj_lf$fn(opt_lf$par))
+
+set.seed(124)
+paka_sims_cpue <- replicate(n_sims, obj_lf$simulate()$cpue_log_obs)
+
+
+## ---- random effects model-------------------------------------------------
+
+map_re <- map_lf
+map_re$log_sigma_r <- as.factor(1)
+
+start_time_re <- Sys.time()
+obj_re <- RTMB::MakeADFun(
+  func       = cmb(opal_model, data_lf),
+  parameters = parameters,
+  map        = map_re,
+  random     = c("init_rdev_a", "rdev_y"),
+  silent     = TRUE
+)
+
+Lwr_re <- rep(-Inf, length(obj_re$par))
+Upr_re <- rep( Inf, length(obj_re$par))
+Lwr_re[grep("log_B0",      names(obj_re$par))] <- log(1)
+Upr_re[grep("log_B0",      names(obj_re$par))] <- log(exp(22))
+Lwr_re[grep("log_cpue_q",  names(obj_re$par))] <- log(0.001)
+Upr_re[grep("log_cpue_q",  names(obj_re$par))] <- log(10)
+Lwr_re[grep("log_sigma_r",  names(obj_re$par))] <- log(0.001)
+Upr_re[grep("log_sigma_r",  names(obj_re$par))] <- log(1.5)
+Lwr_re[grep("rdev_y",      names(obj_re$par))] <- -5
+Upr_re[grep("rdev_y",      names(obj_re$par))] <-  5
+Lwr_re[grep("init_rdev_a", names(obj_re$par))] <- -5
+Upr_re[grep("init_rdev_a", names(obj_re$par))] <-  5
+Lwr_re[grep("par_sel",     names(obj_re$par))] <- -7
+Upr_re[grep("par_sel",     names(obj_re$par))] <-  7
+
+control_re <- list(eval.max = 10000, iter.max = 10000)
+
+opt_re <- nlminb(start = obj_re$par, objective = obj_re$fn,
+                 gradient = obj_re$gr,
+                 lower = Lwr_re, upper = Upr_re, control = control_re)
+opt_re <- nlminb(start = opt_re$par, objective = obj_re$fn,
+                 gradient = obj_re$gr,
+                 lower = Lwr_re, upper = Upr_re, control = control_re)
+
+sdr_re   <- RTMB::sdreport(obj_re)
+end_time_re <- Sys.time()
+paka_runtime_re <- end_time_re - start_time_re
+
+paka_mgc_re <- max(abs(obj_re$gr(opt_re$par)))
+
+invisible(obj_re$fn(opt_re$par))
+estim_re    <- tryCatch(check_estimability(obj = obj_re), error = function(e) e)
+
+paka_iterations_re <- opt_re$iterations
+paka_fn_evals_re   <- opt_re$evaluations[1]
+paka_gr_evals_re   <- opt_re$evaluations[2]
+
+invisible(obj_re$fn(opt_re$par))
+paka_hess_re = optimHess(par = opt_re$par, fn = obj_re$fn, gr = obj_re$gr)
+paka_hess_eigen_values_re <- eigen(paka_hess_re)$values
+rep_re <- obj_re$report()
+
+## ---- Bayesian (MCMC) summaries -------------------------------------------
+# The dense-metric NUTS fit is pre-computed and distributed with the package.
+n_chains_mcmc <- 8L
+mcmc_fit <- readRDS(system.file("extdata", "opaka_mcmc_fit.rds", package = "opal"))
+
+post     <- SparseNUTS::extract_samples(mcmc_fit)
+n_post   <- nrow(post); n_per <- n_post / n_chains_mcmc
+chain_id <- rep(seq_len(n_chains_mcmc), each = n_per)
+iter_id  <- rep(seq_len(n_per),         times = n_chains_mcmc)
+mu_vec   <- obj_lf$env$last.par.best
+
+# Diagnostics table: scalar parameters + three evenly-spaced recruitment deviates
+rdev_cols  <- grep("rdev_y", colnames(post))
+show_rdev  <- colnames(post)[rdev_cols[round(seq(1, length(rdev_cols), length.out = 3))]]
+diag_cols  <- c("log_B0", "log_cpue_q[1]", "log_cpue_q[2]", show_rdev)
+ddf <- as.data.frame(post[, diag_cols, drop = FALSE])
+ddf$.chain <- chain_id; ddf$.iteration <- iter_id
+mcmc_diag <- posterior::summarise_draws(
+  posterior::as_draws_df(ddf),
+  posterior::default_summary_measures(),
+  posterior::default_convergence_measures())
+# Match the MLE to each (possibly indexed) posterior parameter name: mu_vec has
+# repeated names for vector parameters, so resolve "name[i]" positionally.
+mle_for <- function(v) {
+  if (grepl("\\[", v)) {
+    base <- sub("\\[.*", "", v)
+    idx  <- as.integer(sub(".*\\[(\\d+)\\].*", "\\1", v))
+    unname(mu_vec[names(mu_vec) == base][idx])
+  } else {
+    unname(mu_vec[v])
+  }
+}
+mcmc_diag$mle <- vapply(mcmc_diag$variable, mle_for, numeric(1))
+
+# Trace data for the scalar parameters
+scal       <- c("log_B0", "log_cpue_q[1]", "log_cpue_q[2]")
+lcq        <- mu_vec[names(mu_vec) == "log_cpue_q"]
+mcmc_trace <- do.call(rbind, lapply(scal, function(p)
+  data.frame(iter = iter_id, chain = factor(chain_id), param = p, value = post[, p])))
+mcmc_mle_ref <- data.frame(param = scal,
+                           mle = c(mu_vec[["log_B0"]], lcq[1], lcq[2]))
+
+## ---- Forward projections (MVN + MCMC), constant terminal catch -----------
+sdr_sum_lf  <- summary(sdr_lf, "report")
+sbio_rows   <- which(rownames(sdr_sum_lf) == "spawning_biomass_y")
+sbio_mle_sd <- sdr_sum_lf[sbio_rows, "Estimate"]
+sbio_se_sd  <- sdr_sum_lf[sbio_rows, "Std. Error"]
+B0_est      <- rep_lf$B0
+term_idx    <- data$n_year + 1L
+
+# Fields required by the projection helpers
+data_lf$first_yr         <- 1949L
+data_lf$last_yr          <- 2023L
+data_lf$removal_switch_f <- rep(0L, data_lf$n_fishery)
+
+n_proj <- 10L; n_iter <- 200L
+
+rdev_proj <- project_rec_devs(data = data_lf, obj = obj_lf,
+  first_yr = data_lf$first_yr, n_proj = n_proj, n_iter = n_iter)
+sel_proj  <- project_selectivity(data = data_lf, obj = obj_lf,
+  first_yr = data_lf$last_yr - 9, n_proj = n_proj, n_iter = n_iter)
+catch_ysf_proj <- array(0, dim = c(n_proj, data_lf$n_season, data_lf$n_fishery))
+for (y in seq_len(n_proj)) catch_ysf_proj[y, , ] <- data_lf$catch_obs_ysf[data_lf$n_year, , ]
+
+proj_mvn <- project_dynamics(data = data_lf, object = obj_lf, mcmc = NULL,
+  n_proj = n_proj, n_iter = n_iter, rdev_y = rdev_proj$rdev_y,
+  sel_fya = sel_proj, catch_ysf = catch_ysf_proj, return_hist = TRUE)
+
+rdev_proj_mcmc <- project_rec_devs(data = data_lf, obj = obj_lf, mcmc = mcmc_fit,
+  first_yr = data_lf$first_yr, n_proj = n_proj, n_iter = n_iter)
+proj_mcmc <- project_dynamics(data = data_lf, object = obj_lf, mcmc = mcmc_fit,
+  n_proj = n_proj, n_iter = n_iter, rdev_y = rdev_proj_mcmc$rdev_y,
+  sel_fya = sel_proj, catch_ysf = catch_ysf_proj, return_hist = TRUE)
+
+# Projected spawning biomass per iteration (proj_year 0 = terminal bridge state)
+spa <- rep_lf$spawning_potential_a
+sbio_iter <- function(proj_list, label) {
+  do.call(rbind, lapply(seq_along(proj_list), function(i) {
+    dyn <- proj_list[[i]]
+    sb  <- sapply(1:(n_proj + 1), function(y) sum(dyn$number_ysa[y, 1, ] * spa))
+    data.frame(iter = i, proj_year = 0:n_proj, sbio = sb, method = label)
+  }))
+}
+df_all <- rbind(sbio_iter(proj_mvn$dyn, "MVN"), sbio_iter(proj_mcmc$dyn, "MCMC"))
+
+# Historical window (last 60 yr) mapped to calendar years (t = n_year+1 -> 2024)
+n_hist_show <- 60L
+hist_idx    <- (term_idx - n_hist_show + 1):term_idx
+hist_years  <- 1948L + hist_idx
+
+df_hist_mvn <- data.frame(year = hist_years,
+  med  = sbio_mle_sd[hist_idx],
+  lo50 = sbio_mle_sd[hist_idx] - qnorm(0.75) * sbio_se_sd[hist_idx],
+  hi50 = sbio_mle_sd[hist_idx] + qnorm(0.75) * sbio_se_sd[hist_idx],
+  lo90 = sbio_mle_sd[hist_idx] - qnorm(0.95) * sbio_se_sd[hist_idx],
+  hi90 = sbio_mle_sd[hist_idx] + qnorm(0.95) * sbio_se_sd[hist_idx],
+  method = "MVN")
+hist_ribbon <- function(hist_sbio, label, idx, years) {
+  do.call(rbind, lapply(seq_along(idx), function(k) {
+    v <- hist_sbio[, idx[k]]
+    data.frame(year = years[k], med = median(v, na.rm = TRUE),
+      lo50 = quantile(v, .25, na.rm = TRUE), hi50 = quantile(v, .75, na.rm = TRUE),
+      lo90 = quantile(v, .05, na.rm = TRUE), hi90 = quantile(v, .95, na.rm = TRUE),
+      method = label)
+  }))
+}
+df_hist_mcmc     <- hist_ribbon(proj_mcmc$hist_sbio, "MCMC", hist_idx, hist_years)
+proj_hist_ribbon <- rbind(df_hist_mvn, df_hist_mcmc)
+
+proj_ribbon <- df_all |>
+  dplyr::filter(!is.na(sbio)) |>
+  dplyr::group_by(method, proj_year) |>
+  dplyr::summarise(med  = median(sbio),
+                   lo50 = quantile(sbio, .25), hi50 = quantile(sbio, .75),
+                   lo90 = quantile(sbio, .05), hi90 = quantile(sbio, .95),
+                   .groups = "drop") |>
+  dplyr::mutate(year = 2024L + proj_year)
+
+proj_hist_mle <- data.frame(year = hist_years, sbio = sbio_mle_sd[hist_idx])
+proj_om <- subset(opaka_truth$om$sprseries, Yr %in% hist_years, select = c(Yr, SSB))
+proj_em <- subset(opaka_truth$em$sprseries, Yr %in% hist_years, select = c(Yr, SSB))
+
+## ---- Results bundle (everything the document consumes) -------------------
+paka <- list(
+  par     = opt_lf$par,
+  pdh     = isTRUE(sdr_lf$pdHess),
+  mgc     = paka_mgc,
+  mgc_sci = formatC(paka_mgc, format = "e", digits = 2),
+  estim   = estim,
+  ssb     = data.frame(
+    year     = calendar_years,
+    estimate = rep_lf$spawning_biomass_y[1:data$n_year],
+    model    = "opal (with LF)"
+  ),
+  om = subset(opaka_truth$om$sprseries, Yr %in% calendar_years,
+              select = c(Yr, SSB)),
+  em = subset(opaka_truth$em$sprseries, Yr %in% calendar_years,
+              select = c(Yr, SSB))
+)
+
+paka$report <- rep_lf
+paka$runtime <- paka_runtime
+paka$iterations <- paka_iterations
+paka$fn_evals   <- paka_fn_evals
+paka$gr_evals   <- paka_gr_evals
+paka$hess_eigen_values <- paka_hess_eigen_values
+paka$sims_cpue <- paka_sims_cpue
+paka$sdreport <- sdr_lf
+paka$sdreport_re <- sdr_re
+
+paka$par_re     <- opt_re$par
+paka$pdh_re     <- isTRUE(sdr_re$pdHess)
+paka$mgc_re     <- paka_mgc_re
+paka$mgc_sci_re <- formatC(paka_mgc_re, format = "e", digits = 2)
+paka$ssb_re     <- data.frame(
+  year     = calendar_years,
+  estimate = rep_re$spawning_biomass_y[1:data$n_year],
+  model    = "opal (RE)"
+)
+paka$report_re <- rep_re
+paka$runtime_re <- paka_runtime_re
+paka$estim_re   <- estim_re
+paka$iterations_re <- paka_iterations_re
+paka$fn_evals_re   <- paka_fn_evals_re
+paka$gr_evals_re   <- paka_gr_evals_re
+paka$hess_eigen_values_re <- paka_hess_eigen_values_re
+
+## ---- Bayesian + projection outputs appended to the bundle ----------------
+paka$mcmc_diag        <- mcmc_diag
+paka$mcmc_trace       <- mcmc_trace
+paka$mcmc_mle_ref     <- mcmc_mle_ref
+paka$n_chains_mcmc    <- n_chains_mcmc
+paka$proj_hist_ribbon <- proj_hist_ribbon
+paka$proj_ribbon      <- proj_ribbon
+paka$proj_hist_mle    <- proj_hist_mle
+paka$proj_om          <- proj_om
+paka$proj_em          <- proj_em
+paka$n_proj           <- n_proj
+paka$n_iter           <- n_iter
+paka$n_hist_show      <- n_hist_show
+
+saveRDS(paka, paka_fit_path)
+
+}   # end cache-miss branch
+```
+
+```{r}
+#| label: load-bet-cache
+#| include: false
+
+bet_fit_candidates <- c(
+  file.path(doc_dir, "cached", "bet", "opal_bet_fit.rds"),
+  file.path(doc_dir, "assets", "cached", "bet", "opal_bet_fit.rds"),
+  file.path(getwd(), "cached", "bet", "opal_bet_fit.rds"),
+  file.path(getwd(), "assets", "cached", "bet", "opal_bet_fit.rds")
+)
+bet_fit_path <- bet_fit_candidates[file.exists(bet_fit_candidates)][1]
+if (is.na(bet_fit_path)) {
+  stop("BET cached results not found")
+}
+bet <- readRDS(bet_fit_path)
+bet_final_sb_b0 <- tail(bet$report$spawning_biomass_y, 1) / bet$report$B0
+bet_final_dyn_dep <- tail(bet$report$dynamic_depletion_y, 1)
+format_duration <- function(seconds) {
+  if (is.null(seconds) || length(seconds) == 0 || !is.finite(seconds)) {
+    return("not recorded")
+  }
+  if (seconds < 90) {
+    paste0(round(seconds, 1), " s")
+  } else {
+    paste0(round(seconds / 60, 1), " min")
+  }
+}
+bet_mle_runtime_text <- format_duration(bet$diagnostics$mle_runtime_seconds)
+bet_mle_iterations <- if (is.null(bet$diagnostics$mle_runtime_iterations)) {
+  bet$opt$iterations
+} else {
+  bet$diagnostics$mle_runtime_iterations
+}
+bet_mle_function_evals <- if (is.null(bet$diagnostics$mle_runtime_evaluations)) {
+  bet$opt$evaluations[["function"]]
+} else {
+  bet$diagnostics$mle_runtime_evaluations[["function"]]
+}
+bet_mle_gradient_evals <- if (is.null(bet$diagnostics$mle_runtime_evaluations)) {
+  bet$opt$evaluations[["gradient"]]
+} else {
+  bet$diagnostics$mle_runtime_evaluations[["gradient"]]
+}
+bet_xmodel_biomass_for_b0 <- readRDS(file.path(dirname(bet_fit_path), "wcpo_bet_xmodel_biomass.rds"))
+bet_xmodel_b0 <- bet_xmodel_biomass_for_b0 %>%
+  mutate(B0 = ssb / depletion) %>%
+  group_by(model) %>%
+  summarise(B0 = median(B0, na.rm = TRUE), .groups = "drop")
+bet_ss3_fix_b0 <- bet_xmodel_b0$B0[bet_xmodel_b0$model == "02-fix-sel"]
+bet_mfcl_b0 <- bet_xmodel_b0$B0[bet_xmodel_b0$model == "MFCL-v11"]
+bet_lfwf_downweight_mult <- bet$diagnostics$mle_runtime_control$wf_var_adjust / 2000
+bet_lf_adjust_scalar <- bet$diagnostics$mle_runtime_control$lf_var_adjust_scalar
+bet_lf_adjust_override <- bet$diagnostics$mle_runtime_control$lf_var_adjust_override
+bet_lf8_adjust <- unname(bet_lf_adjust_override[["8"]])
+bet_lf10_adjust <- unname(bet_lf_adjust_override[["10"]])
+bet_wf_adjust <- bet$diagnostics$mle_runtime_control$wf_var_adjust
+bet_wf_adjust_override <- bet$diagnostics$mle_runtime_control$wf_var_adjust_override
+bet_lf_override_text <- if (length(bet_lf_adjust_override)) {
+  paste(paste0("F", names(bet_lf_adjust_override), " = ",
+               as.numeric(bet_lf_adjust_override)), collapse = ", ")
+} else {
+  "none"
+}
+bet_wf_override_text <- if (length(bet_wf_adjust_override)) {
+  paste(paste0("F", names(bet_wf_adjust_override), " = ",
+               as.numeric(bet_wf_adjust_override)), collapse = ", ")
+} else {
+  "none"
+}
+bet_cpue_log_rmse <- sqrt(mean((log(bet$data$cpue_data$value) -
+                                  log(as.numeric(bet$report$cpue_pred)))^2,
+                                na.rm = TRUE))
+bet_cpue_fixed_tau <- unique(round(
+  sqrt(pmax(as.numeric(bet$report$cpue_sigma)^2 -
+              bet$data$cpue_data$se^2, 0)),
+  10
+))
+bet_cpue_fixed_tau_range <- range(bet_cpue_fixed_tau, na.rm = TRUE)
+bet_cpue_fixed_tau_text <- if (diff(bet_cpue_fixed_tau_range) < 1e-6) {
+  formatC(median(bet_cpue_fixed_tau, na.rm = TRUE), format = "e", digits = 0)
+} else {
+  paste(signif(bet_cpue_fixed_tau_range, 3), collapse = "--")
+}
+bet_agg6_summary_path <- file.path(dirname(bet_fit_path), "opal_bet_agg6_summary.rds")
+if (!file.exists(bet_agg6_summary_path)) {
+  stop("BET six-fishery summary cache not found: ", bet_agg6_summary_path)
+}
+bet_agg6_summary <- readRDS(bet_agg6_summary_path)
+bet_agg6 <- bet_agg6_summary$downweight0p1
+if (is.null(bet_agg6)) {
+  stop("BET six-fishery downweighted run is not available in the summary cache")
+}
+bet_agg6_raw_path <- file.path(dirname(bet_fit_path), "agg6_dw0p1", "agg6_result.rds")
+if (!file.exists(bet_agg6_raw_path)) {
+  stop("BET six-fishery raw cache not found: ", bet_agg6_raw_path)
+}
+bet_agg6_raw <- readRDS(bet_agg6_raw_path)
+bet_agg6_metrics <- bet_agg6$metrics
+bet_agg6_lfwf_downweight_mult <- bet_agg6_metrics$wf_var_adjust / 2000
+bet_agg6_final_sb_b0 <- bet_agg6_metrics$final_spawning_biomass_ratio
+bet_agg6_final_dyn_dep <- tail(bet_agg6$biomass$dynamic_depletion, 1)
+bet_agg6_group_labels <- bet_agg6$grouping %>%
+  transmute(
+    fishery = group,
+    group_label = paste0("Group ", group, " (old F", old_fisheries, ")")
+  )
+
+source_opal_r_env <- function(path = Sys.getenv("OPAL_SOURCE_DIR", unset = "")) {
+  if (nzchar(path)) {
+    r_dir <- file.path(path, "R")
+    if (!dir.exists(r_dir)) {
+      stop("Local opal source directory not found: ", r_dir)
+    }
+    env <- new.env(parent = globalenv())
+    for (file in list.files(r_dir, pattern = "\\.R$", full.names = TRUE)) {
+      sys.source(file, envir = env)
+    }
+    return(env)
+  }
+  if (!requireNamespace("opal", quietly = TRUE)) {
+    stop("The opal package is required; install it with renv::restore() or set OPAL_SOURCE_DIR")
+  }
+  asNamespace("opal")
+}
+
+resolve_bet_cache_path <- function(path, cache_dir) {
+  if (is.null(path) || !length(path) || is.na(path) || !nzchar(path)) {
+    return(NA_character_)
+  }
+  path <- gsub("\\\\", "/", path)
+  candidates <- path
+  rel_from_cache <- sub("^.*assets/cached/bet/?", "", path)
+  if (!identical(rel_from_cache, path) && nzchar(rel_from_cache)) {
+    candidates <- c(candidates, file.path(cache_dir, rel_from_cache))
+  }
+  if (!grepl("^/", path)) {
+    candidates <- c(candidates, file.path(cache_dir, path))
+  }
+  candidates <- unique(candidates)
+  hits <- candidates[file.exists(candidates)]
+  if (length(hits)) hits[[1]] else NA_character_
+}
+
+bet_switch_objective_components <- function(result, opal_env) {
+  fit <- result$fit
+  if (is.null(fit) || is.null(fit$data) || is.null(fit$parameters) ||
+      is.null(fit$map)) {
+    stop("Switch objective decomposition requires raw fit data, parameters, and map")
+  }
+  make_obj <- function(cpue_switch, lf_switch, wf_switch) {
+    data_i <- fit$data
+    data_i$cpue_switch <- as.integer(cpue_switch)
+    data_i$lf_switch <- as.integer(lf_switch)
+    data_i$wf_switch <- as.integer(wf_switch)
+    obj <- MakeADFun(
+      func = opal_env$cmb(opal_env$opal_model, data_i),
+      parameters = fit$parameters,
+      map = fit$map
+    )
+    obj$env$tracemgc <- FALSE
+    obj
+  }
+
+  par <- result$opt$par
+  values <- c(
+    none = make_obj(0L, 0L, 0L)$fn(par),
+    cpue_only = make_obj(1L, 0L, 0L)$fn(par),
+    lf_only = make_obj(0L, 1L, 0L)$fn(par),
+    wf_only = make_obj(0L, 0L, 1L)$fn(par),
+    all = make_obj(1L, 1L, 1L)$fn(par)
+  )
+  components <- c(
+    "Baseline contribution" = unname(values[["none"]]),
+    "CPUE contribution" = unname(values[["cpue_only"]] - values[["none"]]),
+    "LF contribution" = unname(values[["lf_only"]] - values[["none"]]),
+    "WF contribution" = unname(values[["wf_only"]] - values[["none"]])
+  )
+  total <- sum(components)
+  if (abs(total - values[["all"]]) > 1e-6) {
+    stop("Switch objective components do not sum to all-on objective")
+  }
+  if (abs(values[["all"]] - result$opt$objective) > 1e-5) {
+    stop("Switch all-on objective does not match cached optimizer objective")
+  }
+  components
+}
+
+bet_opal_source_env <- source_opal_r_env()
+bet_raw_source_path <- resolve_bet_cache_path(bet$source, dirname(bet_fit_path))
+bet_raw_source <- if (!is.na(bet_raw_source_path) && file.exists(bet_raw_source_path)) {
+  readRDS(bet_raw_source_path)[[1]]
+} else {
+  NULL
+}
+if (is.null(bet_raw_source)) {
+  stop("Retained BET raw source cache is required for switch objective decomposition: ", bet$source)
+}
+bet_objective_components <- bet_switch_objective_components(
+  bet_raw_source,
+  bet_opal_source_env
+)
+bet_agg6_objective_components <- bet_switch_objective_components(
+  bet_agg6_raw$result,
+  bet_opal_source_env
+)
+
+bet_harmonic_mean <- function(x) {
+  x <- x[is.finite(x) & x > 0]
+  if (!length(x)) return(NA_real_)
+  length(x) / sum(1 / x)
+}
+bet_sdnr_summary <- function(x, conf = 0.95) {
+  x <- x[is.finite(x)]
+  df <- length(x) - 1L
+  est <- sd(x)
+  if (df < 1L) {
+    return(tibble(osa_sdnr = est, osa_sdnr_lci = NA_real_, osa_sdnr_hci = NA_real_))
+  }
+  alpha <- (1 - conf) / 2
+  tibble(
+    osa_sdnr = est,
+    osa_sdnr_lci = sqrt(df * est^2 / qchisq(1 - alpha, df)),
+    osa_sdnr_hci = sqrt(df * est^2 / qchisq(alpha, df))
+  )
+}
+bet_normalise_composition <- function(x) {
+  total <- sum(x, na.rm = TRUE)
+  if (!is.finite(total) || total <= 0) return(rep(NA_real_, length(x)))
+  x / total
+}
+bet_weighted_comp_summary <- function(comp_matrix, bins, n_eff, group) {
+  if (nrow(comp_matrix) != length(n_eff) || nrow(comp_matrix) != length(group)) {
+    stop("Composition rows, effective N, and grouping vector do not align")
+  }
+
+  as_tibble(comp_matrix, .name_repair = ~ as.character(bins)) %>%
+    mutate(.group = group, .n_eff = as.numeric(n_eff)) %>%
+    pivot_longer(
+      cols = -c(.group, .n_eff),
+      names_to = "bin",
+      values_to = "proportion"
+    ) %>%
+    mutate(
+      bin = as.numeric(bin),
+      weighted_count = proportion * .n_eff
+    ) %>%
+    group_by(.group, bin) %>%
+    summarise(
+      proportion = sum(weighted_count, na.rm = TRUE) /
+        sum(.n_eff[is.finite(.n_eff)], na.rm = TRUE),
+      .groups = "drop"
+    )
+}
+bet_simulate_pooled_composition <- function(pred_matrix, bins, n_eff, group,
+                                            nsim = 20L) {
+  if (nrow(pred_matrix) != length(n_eff) || nrow(pred_matrix) != length(group)) {
+    stop("Prediction rows, effective N, and grouping vector do not align")
+  }
+
+  integerise_n_eff <- function(n) {
+    if (!is.finite(n) || n <= 0) return(0L)
+    base <- floor(n)
+    as.integer(base + stats::rbinom(1L, size = 1L, prob = n - base))
+  }
+
+  group_levels <- sort(unique(group))
+  map_dfr(seq_len(nsim), function(s) {
+    map_dfr(group_levels, function(g) {
+      idx <- which(group == g)
+      sim_counts <- t(vapply(idx, function(r) {
+        p <- as.numeric(pred_matrix[r, ])
+        p[!is.finite(p) | p < 0] <- 0
+        p <- if (sum(p) > 0) p / sum(p) else rep(1 / length(p), length(p))
+        size <- integerise_n_eff(n_eff[r])
+        if (size <= 0L) return(rep(0, length(p)))
+        as.numeric(rmultinom(1L, size = size, prob = p))
+      }, numeric(ncol(pred_matrix))))
+      total_counts <- colSums(sim_counts, na.rm = TRUE)
+      total_n <- sum(total_counts)
+      tibble(
+        .group = g,
+        bin = bins,
+        proportion = if (total_n > 0) as.numeric(total_counts) / total_n else NA_real_,
+        sim_id = s
+      )
+    })
+  }) %>%
+    filter(is.finite(proportion))
+}
+bet_prediction_rows <- function(pred_list, fishery_f, row_fishery, n_eff) {
+  pred_matrix <- do.call(rbind, lapply(pred_list, as.matrix))
+  pred_fishery <- rep(fishery_f, vapply(pred_list, nrow, integer(1)))
+  if (length(row_fishery) != nrow(pred_matrix) ||
+      length(n_eff) != nrow(pred_matrix)) {
+    stop("Prediction rows, fishery rows, and effective-N rows do not align")
+  }
+  if (!identical(as.integer(pred_fishery), as.integer(row_fishery))) {
+    stop("Prediction-list fishery order does not match the data row order")
+  }
+  list(
+    pred = pred_matrix,
+    fishery = as.integer(pred_fishery),
+    n_eff = as.numeric(n_eff)
+  )
+}
+bet_flat_to_count_list <- function(v, n_f, fishery_f, minbin, maxbin) {
+  out <- vector("list", length(n_f))
+  offset <- 0L
+  for (k in seq_along(n_f)) {
+    f <- fishery_f[k]
+    nbins <- maxbin[f] - minbin[f] + 1L
+    n_values <- n_f[k] * nbins
+    out[[k]] <- matrix(
+      v[seq.int(offset + 1L, length.out = n_values)],
+      nrow = n_f[k],
+      ncol = nbins,
+      byrow = TRUE
+    )
+    offset <- offset + n_values
+  }
+  out
+}
+bet_quiet_comp_residual_warnings <- function(expr) {
+  withCallingHandlers(
+    expr,
+    warning = function(w) {
+      if (grepl("NA/NaN function evaluation", conditionMessage(w), fixed = TRUE)) {
+        invokeRestart("muffleWarning")
+      }
+    }
+  )
+}
+bet_comp_residual_rows <- bind_rows(
+  bet$diagnostics$lf_residuals,
+  bet$diagnostics$wf_residuals
+) %>%
+  mutate(
+    fishery_num = as.integer(sub("Fishery ", "", Fishery)),
+    composition = factor(composition, levels = c("Length", "Weight"))
+  )
+bet_comp_cell_summary <- bet_comp_residual_rows %>%
+  filter(is.finite(residual)) %>%
+  group_by(composition, Fishery, fishery_num) %>%
+  group_modify(~bind_cols(
+    tibble(
+      n_cells = nrow(.x),
+      mean = mean(.x$residual),
+      mar = median(abs(.x$residual)),
+      max_abs = max(abs(.x$residual))
+    ),
+    bet_sdnr_summary(.x$residual)
+  )) %>%
+  ungroup() %>%
+  select(
+    composition, Fishery, fishery_num,
+    n_cells,
+    mean, osa_sdnr, osa_sdnr_lci, osa_sdnr_hci, mar, max_abs
+  )
+bet_comp_row_diagnostics <- bet_comp_residual_rows %>%
+  group_by(composition, Fishery, fishery_num, row) %>%
+  group_modify(~{
+    obs <- bet_normalise_composition(.x$observed)
+    pred <- bet_normalise_composition(.x$predicted)
+    bin <- .x$bin
+    n_eff <- .x$n_eff[1]
+    if (anyNA(obs) || anyNA(pred) || !is.finite(n_eff) || n_eff <= 0) {
+      return(tibble(
+        n_eff = n_eff,
+        mean_residual = NA_real_,
+        mi_eff_n = NA_real_
+      ))
+    }
+    obs_mean <- sum(obs * bin)
+    pred_mean <- sum(pred * bin)
+    var_mean <- (sum(pred * bin^2) - pred_mean^2) / n_eff
+    mean_residual <- if (is.finite(var_mean) && var_mean > 0) {
+      (obs_mean - pred_mean) / sqrt(var_mean)
+    } else {
+      NA_real_
+    }
+    denominator <- sum((obs - pred)^2)
+    numerator <- sum(pred * (1 - pred))
+    mi_eff_n <- if (is.finite(denominator) && denominator > 0) {
+      numerator / denominator
+    } else {
+      Inf
+    }
+    tibble(
+      n_eff = n_eff,
+      mean_residual = mean_residual,
+      mi_eff_n = mi_eff_n
+    )
+  }) %>%
+  ungroup()
+bet_comp_mean_summary <- bet_comp_row_diagnostics %>%
+  group_by(composition, Fishery, fishery_num) %>%
+  summarise(
+    n_rows = n(),
+    francis_sdnr = sd(mean_residual[is.finite(mean_residual)]),
+    francis_n_multiplier = ifelse(
+      is.finite(francis_sdnr) && francis_sdnr > 0,
+      1 / francis_sdnr^2,
+      NA_real_
+    ),
+    mean_input_n = mean(n_eff, na.rm = TRUE),
+    median_input_n = median(n_eff, na.rm = TRUE),
+    mi_harmonic_n = bet_harmonic_mean(mi_eff_n),
+    mi_median_n = median(mi_eff_n[is.finite(mi_eff_n)], na.rm = TRUE),
+    mi_over_mean_input_n = mi_harmonic_n / mean_input_n,
+    .groups = "drop"
+  )
+bet_comp_diagnostic_summary <- bet_comp_cell_summary %>%
+  left_join(
+    bet_comp_mean_summary,
+    by = c("composition", "Fishery", "fishery_num")
+  ) %>%
+  arrange(composition, fishery_num)
+bet_comp_residual_source <- bet$diagnostics$residual_source
+if (is.null(bet_comp_residual_source) || !length(bet_comp_residual_source)) {
+  bet_comp_residual_source <- "`compResidual::resMulti`"
+}
+bet_comp_mean_input_n_range <- range(
+  bet_comp_diagnostic_summary$mean_input_n,
+  na.rm = TRUE
+)
+
+bet_comp_fit_metrics_from_rows <- function(rows) {
+  rows %>%
+    group_by(composition, Fishery, fishery_num) %>%
+    summarise(
+      prop_rmse = sqrt(mean((observed - predicted)^2, na.rm = TRUE)),
+      .groups = "drop"
+    ) %>%
+    left_join(
+      rows %>%
+        group_by(composition, Fishery, fishery_num, row) %>%
+        summarise(
+          obs_mean = sum(bet_normalise_composition(observed) * bin, na.rm = TRUE),
+          pred_mean = sum(bet_normalise_composition(predicted) * bin, na.rm = TRUE),
+          .groups = "drop"
+        ) %>%
+        mutate(mean_diff = obs_mean - pred_mean) %>%
+        group_by(composition, Fishery, fishery_num) %>%
+        summarise(
+          mean_size_rmse = sqrt(mean(mean_diff^2, na.rm = TRUE)),
+          mean_size_bias = mean(mean_diff, na.rm = TRUE),
+          .groups = "drop"
+        ),
+      by = c("composition", "Fishery", "fishery_num")
+    )
+}
+
+bet_comp_fit_metrics_15 <- bet_comp_fit_metrics_from_rows(bet_comp_residual_rows)
+bet_comp_diagnostic_summary <- bet_comp_diagnostic_summary %>%
+  left_join(
+    bet_comp_fit_metrics_15,
+    by = c("composition", "Fishery", "fishery_num")
+  )
+
+bet_agg6_report <- bet_agg6_raw$result$report
+bet_agg6_data <- bet_agg6_raw$result$fit$data
+
+bet_agg6_cpue_resid <- (
+  log(bet_agg6_data$cpue_data$value) -
+    log(as.numeric(bet_agg6_report$cpue_pred))
+) / as.numeric(bet_agg6_report$cpue_sigma)
+bet_agg6_cpue_sdnr <- bind_rows(
+  tibble(index = "All indices", residual = bet_agg6_cpue_resid),
+  tibble(index = month.name[bet_agg6_data$cpue_data$month],
+         residual = bet_agg6_cpue_resid)
+) %>%
+  group_by(index) %>%
+  group_modify(~bind_cols(
+    tibble(
+      n = sum(is.finite(.x$residual)),
+      MAR = median(abs(.x$residual), na.rm = TRUE)
+    ),
+    bet_sdnr_summary(.x$residual) %>%
+      rename(SDNR = osa_sdnr, LCI = osa_sdnr_lci, HCI = osa_sdnr_hci)
+  )) %>%
+  ungroup() %>%
+  mutate(index = factor(
+    index,
+    levels = c("All indices", month.name[sort(unique(bet_agg6_data$cpue_data$month))])
+  )) %>%
+  arrange(index) %>%
+  mutate(index = as.character(index))
+
+bet_agg6_lf_fit_metrics <- bet_agg6$lf_metrics %>%
+  transmute(
+    composition = "Length",
+    Fishery = paste("Group", fishery),
+    fishery_num = fishery,
+    n_rows = bet_agg6_data$lf_n_f[match(fishery, bet_agg6_data$lf_fishery_f)],
+    mean_input_n = vapply(
+      fishery,
+      function(f) mean(bet_agg6_data$lf_n[bet_agg6_data$lf_fishery == f], na.rm = TRUE),
+      numeric(1)
+    ),
+    prop_rmse = lf_prop_rmse,
+    mean_size_rmse = lf_mean_length_rmse,
+    mean_size_bias = lf_mean_length_bias
+  )
+bet_agg6_wf_fit_metrics <- bet_agg6$wf_metrics %>%
+  transmute(
+    composition = "Weight",
+    Fishery = paste("Group", fishery),
+    fishery_num = fishery,
+    n_rows = bet_agg6_data$wf_n_f[match(fishery, bet_agg6_data$wf_fishery_f)],
+    mean_input_n = vapply(
+      fishery,
+      function(f) mean(bet_agg6_data$wf_n[bet_agg6_data$wf_fishery == f], na.rm = TRUE),
+      numeric(1)
+    ),
+    prop_rmse = wf_prop_rmse,
+    mean_size_rmse = wf_mean_weight_rmse,
+    mean_size_bias = wf_mean_weight_bias
+  )
+bet_agg6_comp_fit_summary <- bind_rows(
+  bet_agg6_lf_fit_metrics,
+  bet_agg6_wf_fit_metrics
+) %>%
+  arrange(composition, fishery_num)
+
+bet_agg6_ts_to_decimal_year <- function(ts) {
+  bet_agg6_data$first_yr + (as.integer(ts) - 1L) %/% bet_agg6_data$n_season +
+    ((as.integer(ts) - 1L) %% bet_agg6_data$n_season) / bet_agg6_data$n_season
+}
+
+bet_agg6_comp_residual_rows_by_type <- function(type_label, obs_flat, pred_list,
+                                                n_by_row, n_f, fishery_f,
+                                                year_fi, minbin, maxbin, bins) {
+  obs_list <- bet_flat_to_count_list(obs_flat, n_f, fishery_f, minbin, maxbin)
+  row_offset <- 0L
+
+  map_dfr(seq_along(pred_list), function(i) {
+    f <- fishery_f[i]
+    n_rows <- n_f[i]
+    row_ids <- seq.int(row_offset + 1L, length.out = n_rows)
+    row_offset <<- row_offset + n_rows
+    active_bins <- bins[minbin[f]:maxbin[f]]
+    pred <- pred_list[[i]]
+    obs <- obs_list[[i]]
+    years <- year_fi[[as.character(f)]]
+
+    map_dfr(seq_len(n_rows), function(j) {
+      obs_prop <- bet_normalise_composition(obs[j, ])
+      pred_prop <- bet_normalise_composition(pred[j, ])
+      n_eff <- n_by_row[row_ids[j]]
+
+      if (anyNA(obs_prop) || anyNA(pred_prop) ||
+          !is.finite(n_eff) || n_eff <= 0) {
+        return(tibble())
+      }
+
+      pred_prop <- pred_prop + 1e-6
+      pred_prop <- pred_prop / sum(pred_prop)
+      residual <- as.numeric(bet_quiet_comp_residual_warnings(
+        compResidual::resMulti(
+          obs = matrix(obs_prop * n_eff, ncol = 1L),
+          pred = matrix(pred_prop, ncol = 1L)
+        )
+      ))
+      plot_year <- years[j]
+      if (!is.finite(plot_year) || plot_year < 1000) {
+        plot_year <- bet_agg6_ts_to_decimal_year(years[j])
+      }
+
+      tibble(
+        composition = type_label,
+        type = paste(type_label, "composition"),
+        Fishery = paste("Group", f),
+        fishery_num = f,
+        row = row_ids[j],
+        year = plot_year,
+        bin = active_bins[seq_along(residual)],
+        observed = obs_prop[seq_along(residual)],
+        predicted = pred_prop[seq_along(residual)],
+        n_eff = n_eff,
+        residual = residual,
+        sign = if_else(residual >= 0, "Positive", "Negative")
+      )
+    })
+  })
+}
+
+bet_agg6_comp_residual_rows <- bind_rows(
+  bet_agg6_comp_residual_rows_by_type(
+    type_label = "Length",
+    obs_flat = bet_agg6_data$lf_obs_flat,
+    pred_list = bet_agg6_report$lf_pred,
+    n_by_row = bet_agg6_data$lf_n,
+    n_f = bet_agg6_data$lf_n_f,
+    fishery_f = bet_agg6_data$lf_fishery_f,
+    year_fi = bet_agg6_data$lf_year_fi,
+    minbin = bet_agg6_data$lf_minbin,
+    maxbin = bet_agg6_data$lf_maxbin,
+    bins = bet_agg6_data$len_mid
+  ),
+  bet_agg6_comp_residual_rows_by_type(
+    type_label = "Weight",
+    obs_flat = bet_agg6_data$wf_obs_flat,
+    pred_list = bet_agg6_report$wf_pred,
+    n_by_row = bet_agg6_data$wf_n,
+    n_f = bet_agg6_data$wf_n_f,
+    fishery_f = bet_agg6_data$wf_fishery_f,
+    year_fi = bet_agg6_data$wf_year_fi,
+    minbin = bet_agg6_data$wf_minbin,
+    maxbin = bet_agg6_data$wf_maxbin,
+    bins = bet_agg6_data$wt_mid
+  )
+) %>%
+  left_join(bet_agg6_group_labels, by = c("fishery_num" = "fishery"))
+
+bet_agg6_comp_sdnr_summary <- bet_agg6_comp_residual_rows %>%
+  filter(is.finite(residual)) %>%
+  group_by(composition, Fishery, fishery_num) %>%
+  group_modify(~bind_cols(
+    tibble(
+      n_cells = nrow(.x),
+      mar = median(abs(.x$residual), na.rm = TRUE)
+    ),
+    bet_sdnr_summary(.x$residual)
+  )) %>%
+  ungroup()
+
+bet_agg6_comp_fit_summary <- bet_agg6_comp_fit_summary %>%
+  left_join(
+    bet_agg6_comp_sdnr_summary,
+    by = c("composition", "Fishery", "fishery_num")
+  )
+```
+
+\newpage
+
+![](static/opal-HEX-transparent.png){fig-align="center" width="200px"}
+
+# Executive summary {#sec-executive-summary .unnumbered}
+
+This paper describes `opal` (the **o**pen **p**opulation **a**ssessment **l**ibrary), an open-source, modular R package for fisheries stock assessment, and illustrates its application through two case studies. Development of `opal` is aligned with and supported by *WCPFC Project 123: Scoping the next generation of tuna stock assessment software*, and the current working paper is intended to document a proof of concept for R-based, modular assessment software rather than a finished platform for producing management advice.
+
+`opal` is built on RTMB, which provides automatic differentiation of the objective function, gradient-based optimization, and the Laplace approximation for models with random effects. Writing the model in R keeps the full model definition within a single language, lowering the barrier to inspecting and extending the code. The package builds on the `sbt` package developed for the assessment of southern bluefin tuna, and draws design influences from several existing assessment packages including Stock Synthesis (SS3) and MULTIFAN-CL (MFCL). It estimates age-structured population dynamics with length-based processes; fits CPUE together with length- and weight-composition data under a choice of likelihoods; supports random-effects estimation, catch-based projections, and Bayesian inference via SparseNUTS; and includes a set of built-in diagnostics, comprising estimability and parameter-correlation checks, simulation self-testing, posterior-predictive checks, and one-step-ahead (OSA) residuals.
+
+Two case studies were developed to showcase model features, capabilities and available diagnostics. The first case study applied `opal` to simulated data for Hawai'i 'opakapaka (*Pristipomoides filamentosus*), for which the true dynamics are known from an SS3 operating model. `opal` closely tracked the SS3 spawning-biomass trajectory and the known simulated truth. This case study also illustrated the random-effects, projection, and Bayesian workflows, though the random-effects model was substantially slower than its fixed-effects counterpart. The second case study applied `opal` to real data from the 2020 WCPO bigeye tuna (*Thunnus obesus*) assessment, in a fleets-as-areas configuration, and compared its outputs against the SS3 and MFCL reference models. `opal` closely tracked the spawning-biomass and depletion trajectories of both platforms, though the absolute spawning-biomass scale differed, consistent with differences in selectivity parameterization, composition weighting, and catch-removal calculations across the three models.
+
+Both case studies are illustrative and are not intended to inform management advice. Together they demonstrate that `opal` can estimate population dynamics, accommodate the data volume and dimensionality of a real tuna assessment, and readily produce diagnostic outputs. They also identify outstanding challenges, including the robustness of optimization from naive starting values, the scaling of random effects to higher-dimensional models, and ongoing code optimization.
+
+We invite SC22 to:
+
+- Note the development of `opal` as a proof of concept for R-based, modular assessment software, and its application to two case studies.
+- Comment on the suitability of `opal` for assessments of various species (e.g., tuna, shark and billfish) within the WCPFC.
+- Endorse the continued development of `opal` as a core development stream for the next generation of tuna assessment software.
+
+\newpage
+
+![](static/opal-HEX-transparent.png){fig-align="center" width="200px"}
+
+# Introduction {#sec-introduction}
+
+[`opal`](https://n-ducharmebarth-noaa.github.io/opal/) --- the **o**pen **p**opulation **a**ssessment **l**ibrary --- is an open-source, modular R package for fisheries stock assessment. The package is built on RTMB [@kristensen_rtmb_2023], an R interface to the Template Model Builder framework [@kristensen_tmb_2016], which provides automatic differentiation of the model objective function and supports gradient-based optimization and the Laplace approximation for models that include random effects. Writing the model in R rather than C++ keeps the entire model definition within a single language environment, which lowers the barrier to inspecting, modifying, and extending the underlying code.
+
+`opal` builds directly upon the `sbt` R package developed by [Quantifish](https://www.quantifish.co.nz/) for the assessment of southern bluefin tuna under the Commission for the Conservation of Southern Bluefin Tuna [CCSBT\; @webber_sbt_2026], and draws on design influences from a number of existing assessment platforms, including the Stochastic Population over Regional Components model [SPoRC\; @cheng_span_2026], the Woods Hole Assessment Model [WHAM\; @stock_woods_2021; @miller_woods_2020], Stock Synthesis [SS3\; @methot_stock_2013], CASAL2 [@casal2_development_team_casal2_2026], and MULTIFAN-CL [MFCL\; @fournier_multifan-cl_1998]. The development of `opal` is aligned with and supported by *WCPFC Project 123: Scoping the next generation of tuna stock assessment software*. It provides a proof of concept for the R-based modular software development and takes significant steps towards developing core modules for next generation tuna assessment software.
+
+The intent of `opal` is to provide assessment scientists with a flexible modelling framework that supports the estimation of random effects; facilitates enhanced model diagnostics, including one-step-ahead (OSA) residuals, simulation self-testing, and posterior predictive checks; and integrates directly into a Bayesian estimation framework. These capabilities are described in @sec-features.
+
+The package source code, function documentation, and worked examples are publicly available ([website](https://n-ducharmebarth-noaa.github.io/opal/), [code repository](https://github.com/n-ducharmebarth-noaa/opal), & [documentation repository](https://github.com/n-ducharmebarth-noaa/opal-documentation)), and the package is distributed under an open-source license. This paper describes the structure of the model (@sec-model-structure), its principal features (@sec-features), and two case studies that illustrate its application to a simulated single-species assessment and a real-data tuna assessment (@sec-case-studies).
+
+
+
+# Model structure {#sec-model-structure}
+
+`opal` estimates age-structured population dynamics and accommodates age- or length-based processes. The population is tracked as numbers-at-age. Biological quantities --- weight, maturity, fecundity, natural mortality, and sex ratio --- may be supplied on either an age basis or a length basis: a vector defined over age classes is used directly, while a vector defined over length bins is converted to age through a probability-of-length-at-age (PLA) matrix. Selectivity is likewise defined on a length basis and mapped to age through the PLA. This structure allows population demographics to be specified in terms of either age or length, and allows the model to fit multiple data types: relative abundance indices (CPUE), length composition, and weight composition. Where time-varying or hierarchically structured processes are required, parameters may be specified as random effects and integrated out using the Laplace approximation provided by RTMB [@kristensen_tmb_2016].
+
+The model is implemented as a single objective function, `opal_model()`, that returns the negative log-likelihood (NLL) for a given set of parameters and data. Rather than encoding the population dynamics and observation model as a single monolithic routine, `opal_model()` orchestrates a sequence of standalone, individually documented module functions, each responsible for one component of the calculation. Population-model components --- growth, selectivity, recruitment, and the data likelihoods --- are implemented as separate exported functions rather than embedded in a single routine, so that components can be modified, replaced, or extended independently, and so that individual modules can be tested in isolation. The collection of module functions is registered through a single accessor for use when the model is passed to the Bayesian sampler. This modular organization is intended to make the codebase tractable to maintain, human readable and to lower the barrier to community contribution.
+
+The principal modules, in the order they are evaluated, are: mean length-at-age (`get_growth()`); the standard deviation of length-at-age (`get_sd_at_age()`); the PLA matrix (`get_pla()`); weight-, maturity-, and fecundity-at-age (`get_weight_at_length()`, `get_maturity_at_age()`, and a resolver, `resolve_bio_vector()`, that accepts either age- or length-basis inputs); selectivity-at-age (`get_selectivity()`, with the parametric forms `sel_logistic()` and `sel_double_normal()`); initial equilibrium numbers-at-age (`get_initial_numbers()`); the forward population dynamics and harvest (the `do_dynamics()` and `get_harvest_rate()`); recruitment (`get_recruitment()`); the data likelihoods (`get_cpue_like()`, `get_length_like()`, `get_weight_like()`); and the prior and penalty terms (`get_recruitment_prior()`, `evaluate_priors()`). 
+
+## Population dynamics {#sec-population-dynamics}
+
+The population is structured by year, season, and age, and may be configured for any number of fisheries.
+
+### Growth and the probability of length-at-age {#sec-growth-pla}
+
+Mean length-at-age, $\mu_a$, is computed from a Schnute parameterization of the von Bertalanffy growth function, anchored by the lengths $L_1$ and $L_2$ at two reference ages $A_1$ and $A_2$, which matches the SS3 growth pattern with a linearly interpolated coefficient of variation [@methot_stock_2013]:
+
+$$
+\mu_a = L_1 + (L_2 - L_1)\,\frac{1 - e^{-k(a - A_1)}}{1 - e^{-k(A_2 - A_1)}}.
+$$
+
+*Module: `get_growth()`*
+
+The coefficient of variation is interpolated linearly with mean length between the two reference ages, and the standard deviation of length-at-age is its product with the mean:
+
+$$
+\mathrm{CV}_a = \mathrm{CV}_1 + \frac{\mu_a - L_1}{L_2 - L_1}\,(\mathrm{CV}_2 - \mathrm{CV}_1),
+\qquad
+\sigma_a = \mu_a\,\mathrm{CV}_a.
+$$
+
+*Module: `get_sd_at_age()`*
+
+From $\mu_a$ and $\sigma_a$, the PLA matrix gives the probability that an individual of age $a$ falls within length bin $\ell$, assuming length-at-age is normally distributed. For contiguous bins with edges $\{e_\ell\}$, this is the difference of the normal cumulative distribution function $\Phi$ evaluated at the bin edges:
+
+$$
+P_{\ell a} = \Phi\!\left(\frac{e_{\ell+1} - \mu_a}{\sigma_a}\right) - \Phi\!\left(\frac{e_{\ell} - \mu_a}{\sigma_a}\right),
+\qquad \sum_\ell P_{\ell a} = 1 .
+$$
+
+*Module: `get_pla()`*
+
+The PLA is computed once per function evaluation and reused for the conversion of weight, maturity, fecundity, natural mortality, and selectivity between the length and age bases.
+
+### Biology and spawning potential {#sec-biology}
+
+Quantities defined on a length basis are mapped to age through the PLA. For a length-basis vector $x_\ell$, the age-basis vector is $x_a = \sum_\ell P_{\ell a}\, x_\ell$ (equivalently $\mathbf{x}_a = \mathbf{P}^{\top}\mathbf{x}_\ell$); a vector supplied on an age basis is used directly. Weight-at-length follows an allometric length-weight relationship, $w_\ell = \alpha_{\mathrm{LW}}\, m_\ell^{\beta_{\mathrm{LW}}}$, where $m_\ell$ is the bin midpoint, and is converted to weight-at-age through the PLA. Spawning potential at age is the product of sex ratio (the fraction mature-female-equivalent at age), maturity, and fecundity:
+
+$$
+\psi_a = r_a\, m_a\, f_a ,
+$$
+
+*Modules: `get_weight_at_length()`, `get_maturity_at_age()`, `resolve_bio_vector()`*
+
+where $r_a$, $m_a$, and $f_a$ are sex ratio, maturity, and fecundity at age, respectively. Alternatively, a pre-computed spawning-potential vector may be supplied directly. All derived biology arrays are passed explicitly to the dynamics routine rather than read from the data object, so that automatic-differentiation gradients propagate correctly if any of these quantities are estimated (for example, growth parameters estimated through the PLA, or natural mortality specified as a function of length).
+
+### Initial conditions {#sec-initial-conditions}
+
+The population is initialized at the unfished equilibrium. Unfished survivorship-per-recruit accumulates natural mortality across ages with a plus-group at the oldest age, $\phi_a^{0} = \phi_{a-1}^{0}\,e^{-M_{a-1}}$ with $\phi_{n}^{0}$ divided by $1 - e^{-M_{n}}$, and the unfished spawners-per-recruit is $\Phi_0 = \sum_a \psi_a\, \phi_a^{0}$. Unfished recruitment and the Beverton-Holt parameters follow from unfished spawning biomass $B_0$ and steepness $h$:
+
+$$
+R_0 = \frac{B_0}{\Phi_0},
+\qquad
+a_{\mathrm{BH}} = \frac{4 h R_0}{5h - 1},
+\qquad
+b_{\mathrm{BH}} = \frac{B_0 (1 - h)}{5h - 1}.
+$$
+
+*Module: `get_initial_numbers()`*
+
+When initial fishing mortality is specified, survivorship is recomputed with total mortality $Z_a = M_a + \sum_f F_f^{\mathrm{init}} s_{f,a}$, giving a fished spawners-per-recruit $\Phi_{\mathrm{eq}}$ and an equilibrium recruitment $R_{\mathrm{eq}} = a_{\mathrm{BH}} - b_{\mathrm{BH}}/\Phi_{\mathrm{eq}}$. Initial numbers-at-age are $N_a^{\mathrm{init}} = R_{\mathrm{eq}}\,\phi_a$, optionally modified by estimated initial age-structure deviations with the lognormal bias correction described below.
+
+### Harvest and the forward projection {#sec-harvest}
+
+The population is projected forward over years and seasons. Within each season, survival from natural mortality is $S_a = e^{-M_a / n_{\mathrm{season}}}$. Removals are taken as a harvest fraction rather than a continuous fishing-mortality rate. For each fishery with observed catch, a fully selected harvest rate is obtained by dividing the observed catch by the available biomass (or available numbers, depending on the catch units of the fishery),
+
+$$
+F_{f} = \frac{C_{f}}{\sum_a N_a\, s_{f,a}\, w_{f,a} + \varepsilon},
+\qquad
+h_{f,a} = F_{f}\, s_{f,a},
+$$
+
+*Module: `get_harvest_rate()`*
+
+where $s_{f,a}$ is selectivity-at-age, $w_{f,a}$ is weight-at-age, and $\varepsilon$ is a small constant guarding the denominator. The total harvest rate at age is the sum over fisheries, $h_a = \sum_f h_{f,a}$, and predicted catch-at-age is $\hat{C}_{f,a} = h_{f,a} N_a$. To keep the combined harvest fraction feasible, the quantity $1 - \sum_f F_f$ is passed through a differentiable lower-bound function (`posfun`) that returns the argument where it exceeds a small threshold and otherwise smoothly approaches that threshold, adding the resulting penalty to the objective function.
+
+Surviving numbers are advanced by age and season, with recruitment entering the first age class at the start of each year, and the plus-group accumulating survivors from the oldest two age classes. Spawning biomass is $\mathrm{SB}_y = \sum_a N_{y,a}\, \psi_a$. The routine returns numbers-at-age, predicted catch-at-age by fishery, harvest rates, and the spawning-biomass time series for both the exploited and the dynamic unfished populations; their ratio defines dynamic depletion, $\mathrm{SB}_y / \mathrm{SB}_y^{0}$.
+
+### Recruitment {#sec-recruitment}
+
+Recruitment follows a Beverton-Holt stock-recruitment relationship with annual log-normal deviations $\varepsilon_y$:
+
+$$
+R_y = \frac{a_{\mathrm{BH}}\, \mathrm{SB}_y}{b_{\mathrm{BH}} + \mathrm{SB}_y}\; \exp\!\left(\varepsilon_y - \tfrac{1}{2}\, b_y\, \sigma_r^2\right),
+$$
+
+*Module: `get_recruitment()`*
+
+where $\sigma_r$ is the standard deviation of the deviations and $b_y$ is a year-specific bias-adjustment scalar. The lognormal bias-correction term $\tfrac{1}{2} b_y \sigma_r^2$ optionally can be modulated by a bias-adjustment ramp that reduces the correction in years where recruitment is poorly informed by the data, following the approach used in SS3 [@methot_stock_2013]. Recruitment deviations may be treated as fixed effects (penalized maximum likelihood) or as random effects.
+
+## Likelihood components {#sec-likelihood-components}
+
+The statistical model is written as a joint posterior density for the unknown parameters and latent quantities, conditional on the observed data. In implementation, `opal` evaluates the corresponding negative log posterior as the sum of the data log-likelihood contributions, recruitment-deviation density, parameter prior densities, and a soft harvest-rate constraint. Each data likelihood is controlled by a switch in the data object, so that any combination of CPUE, length composition, and weight composition observations may be included or excluded without altering the model code.
+
+### Abundance indices {#sec-abundance-indices}
+
+Relative abundance is represented as an observation model for the logarithm of each standardized index. The CPUE component (`get_cpue_like()`) supports one or more indices, each with its own catchability $q_j$, additional observation standard deviation $\tau_j$, a power parameter $\omega_j$ relating the index to vulnerable abundance, and a cumulative effort-creep term $\kappa_{ij}$. For observation $i$ in index $j$, a latent uncentred index predictor is formed from the vulnerable abundance $\tilde{N}_i$ associated with that observation,
+
+$$
+\log \hat{I}_{ij} = \log q_j + \omega_j\, \log \tilde{N}_i + \log \kappa_{ij}.
+$$
+
+*Module: `get_cpue_like()`*
+
+Within each index, the abundance and effort-creep contribution $\omega_j\, \log \tilde{N}_i + \log \kappa_{ij}$ is mean-centred on the natural scale and $\log q_j$ is then added, so that $q_j$ sets the mean level of the predicted index and remains identifiable rather than being absorbed by the centring. Observation and process variability are combined in quadrature,
+
+$$
+\sigma_{ij}^2 = \sigma_{\mathrm{obs},ij}^2 + \tau_j^2,
+$$
+
+where $\sigma_{\mathrm{obs},ij}$ is the input standard error. The resulting observation model is
+
+$$
+\log I_{ij} \mid \hat{I}_{ij}, \sigma_{ij}^2
+\sim \mathrm{Normal}\!\left(\log \hat{I}_{ij},\, \sigma_{ij}^2\right),
+$$
+
+and the CPUE contribution to the objective is the negative log density of these observations under this normal model.
+
+### Composition data {#sec-composition-data}
+
+Length and weight composition observations are represented as draws from probability vectors predicted by the population and observation model. Predicted compositions are obtained by converting predicted catch-at-age $\hat{C}_{f,a}$ to a length basis through the PLA (and, for weight composition, an additional length-to-weight rebinning matrix $\mathbf{G}$):
+
+$$
+\hat{p}_{f,\ell} \,\propto\, \sum_a P_{\ell a}\, \hat{C}_{f,a}
+\qquad\text{(length)},
+\qquad
+\hat{p}_{f,k} \,\propto\, \sum_{\ell, a} G_{k\ell}\, P_{\ell a}\, \hat{C}_{f,a}
+\qquad\text{(weight)} .
+$$
+
+*Modules: `get_length_like()`, `get_weight_like()`*
+
+Predicted proportions are aggregated into the active bin range for the fishery, with the tails optionally accumulated into the minimum and maximum bins, then a small robustness constant is added and the vector is renormalized to sum to one. For observation $i$ of fishery $f$, let $\hat{\mathbf{p}}_{if}$ denote this predicted composition, $n_i$ the observed or effective sample size, $\mathbf{c}_{if}$ the observed count vector, and $\mathbf{o}_{if}$ the observed proportion vector. The available observation models are
+
+$$
+\mathbf{c}_{if} \mid \hat{\mathbf{p}}_{if}, n_i
+\sim \mathrm{Multinomial}\!\left(n_i,\, \hat{\mathbf{p}}_{if}\right),
+$$
+
+for the multinomial option,
+
+$$
+\mathbf{o}_{if} \mid \hat{\mathbf{p}}_{if}, n_i, \tau_f
+\sim \mathrm{Dirichlet}\!\left(\hat{\mathbf{p}}_{if}\, n_i\, e^{\tau_f}\right),
+$$
+
+for the Dirichlet option, and
+
+$$
+\mathbf{c}_{if} \mid \hat{\mathbf{p}}_{if}, n_i, \tau_f
+\sim \mathrm{Dirichlet\text{-}Multinomial}\!\left(n_i,\, \hat{\mathbf{p}}_{if}\, e^{\tau_f}\right),
+$$
+
+for the Dirichlet-multinomial option. The parameter $\tau_f$ is a fishery-specific log-scale variance-adjustment parameter that controls the effective sample size or overdispersion. The composition contribution to the objective is the negative log density of the selected observation model. It is evaluated as a batched matrix operation over the observations of each fishery rather than a per-observation loop, which reduces the size of the automatic-differentiation tape.
+
+### Priors and penalties {#sec-priors-penalties}
+
+Prior information is incorporated through a flexible prior specification (`evaluate_priors()`) that applies parametric prior densities to named parameters. Recruitment deviations are treated in the same distributional style. By default,
+
+$$
+\varepsilon_y \mid \sigma_r \sim \mathrm{Normal}(0, \sigma_r^2),
+$$
+
+with the lognormal recruitment bias adjustment applied in the recruitment equation (@sec-recruitment). Initial age-structure deviations, when estimated, use the analogous normal density. These terms can be interpreted as penalties in an MLE fit or as prior/random-effect contributions in the joint posterior. This shared formulation allows the same model code to be optimized with `nlminb` or sampled as a Bayesian model (@sec-bayesian-inference).
+
+# Development pathway {#sec-dev-pathway}
+
+Software development follows a defined contribution workflow. The package uses a two-branch structure: a `dev` branch for active development and a stable `main` branch for tested, release-ready code. New features are developed on branches forked from `dev` and are expected to include roxygen function documentation and minimal, self-contained `testthat` unit tests. Contributions are submitted as pull requests against `dev`, and are incorporated into `main` only after they pass the package checks --- that is, after all tests pass and the package and its vignettes can be built.
+
+Integrated testing operates at several levels. Unit tests verify the behaviour of individual modules; for example, the growth tests confirm that `get_growth()` returns the reference lengths at the reference ages and is monotonic, and that the weight, maturity, and PLA conversions behave as expected. Integration tests verify that the modules combine correctly within the full `opal_model()` objective function and that the objective and its gradient are finite when particular data and likelihood components are active. A numerical-regression baseline (`opal_baseline`), produced and checked through a dedicated vignette, stores a complete reference evaluation of the bigeye case-study model --- the objective value, the gradient, the report output, and timing --- so that a refactored build can be compared against the reference to detect unintended numerical changes and performance regressions. Continuous-integration checks (`R-CMD-check`) are run automatically on the repository.
+
+# Features {#sec-features}
+
+## Bayesian inference {#sec-bayesian-inference}
+
+Prior information can be incorporated either through a penalized maximum likelihood estimation (MLE) approach, in which priors enter the objective function as penalty terms and the model is optimized with `nlminb`, or through direct Bayesian inference. Bayesian estimation is performed with `SparseNUTS` [@monnahan_sparsenuts_2026], which implements a sparse-preconditioned variant of the No-U-Turn Sampler that exploits the sparse precision structure of TMB models to improve sampling efficiency for high-dimensional, correlated, and hierarchically structured posteriors [@monnahan_leveraging_2026]. Since the `opal` objective function and its component modules are constructed in RTMB, the same model definition is used for both the MLE and the Bayesian workflows. Convergence is assessed with the usual Markov chain Monte Carlo (MCMC) diagnostics --- split-$\hat{R}$ and bulk and tail effective sample sizes --- and the resulting posterior draws are carried directly into the forward projections described below. For the 'opakapaka case study (@sec-case-paka), a dense-metric sampler run for eight chains mixed well across the full parameter vector (@tbl-paka-mcmc-diag, @fig-paka-mcmc-trace).
+
+## Projections {#sec-projections}
+
+`opal` supports catch-based forward projection of the population from an estimated set of parameters. A projection is specified by a number of projection years, a future catch scenario, and a number of uncertainty iterations, and is run with `project_dynamics()` together with the helper functions `project_rec_devs()` and `project_selectivity()`. Future recruitment deviations are simulated from an ARIMA model fitted to the estimated recruitment-deviation series (or, under the Bayesian workflow, to each posterior draw's own deviation history), and future selectivity is resampled from the most recent estimated years, so that both process components carry forward the variability seen in the historical period.
+
+Projections are conditioned on the specified future catch and propagate parameter uncertainty into the projected quantities. Two approaches to characterizing that uncertainty are available: resampling from a multivariate normal (MVN) approximation to the joint parameter distribution at the mode, and propagation of a posterior sample obtained by MCMC (@sec-bayesian-inference). Under the MVN approach the scalar parameters are drawn from the Hessian-based covariance while the recruitment and initial-age deviations are set to their conditional expectation given those draws. This preserves the estimated correlation between population scale and the deviations and avoids a Jensen-inequality inflation of mean biomass, so that the uncertainty in the terminal (projection-start) state coincides with the delta-method uncertainty of the historical trajectory. Both approaches yield distributions of projected spawning biomass and depletion under the specified catch scenario (@fig-paka-projection).
+
+## Model diagnostics {#sec-model-diagnostics}
+
+`opal` provides a set of built-in diagnostics intended to support model evaluation and validation. These include estimability checks and parameter-correlation summaries derived from the fitted model; simulation self-testing, in which data are simulated from the model and re-estimated to confirm that parameters can be recovered; posterior-predictive checking where the observations are compared to the simulated distributions of the predictions given the model and OSA residuals, computed through RTMB's `oneStepPredict()`, which provide residuals that are independent and identically distributed under a correctly specified model and are therefore more readily interpretable than ordinary residuals for non-Gaussian observations [@dunn_randomized_1996; @thygesen_validation_2017; @kristensen_tmb_2016]. The simulation and posterior-predictive capabilities also support the projection and Bayesian workflows described above.
+
+# Case studies {#sec-case-studies}
+
+Two case studies are distributed with the package as worked examples. The first applies `opal` to simulated data for which the underlying population dynamics are known; the second applies it to real data from an existing WCPFC tuna assessment. Detailed configuration, code, and outputs for each are provided in the package vignettes. In both cases the examples are purely illustrative and developed for the purpose of demonstrating the model structure, features, or comparability with existing software platforms. They are not intended to be used as a basis for management advice.
+
+## Hawai'i 'Opakapaka {#sec-case-paka}
+
+The first case study uses simulated data for Hawai'i 'opakapaka (*Pristipomoides filamentosus*), a deepwater snapper, for which the true population dynamics are known. The reference model was constructed in SS3 [v3.30.19\; @methot_stock_2013] as part of an associated simulation study [@oshima_opakapaka_2026], which provides both an operating model that generates the data and an estimation model fitted to those data. The `opal` model covered the historical period 1949--2023 with three fleets --- a commercial fishery, a non-commercial fishery, and a research-fishery survey --- at an annual time step, and was fitted to two CPUE indices, generated with negligible observation error, together with length composition data from the commercial and survey fleets.
+
+Two versions of the `opal` model were configured in this case study. A baseline fixed effects version was configured to estimate population scale, annual recruitment deviations, initial age structure, and selectivity parameters for the fleets that have length composition data, with the remaining life-history and fishery parameters fixed at the values used to generate the simulated data. Alternatively, a random effects version of the `opal` model was configured identically to the first with the exception that random effects were used to estimate the annual recruitment deviations and the initial age structure, and recruitment variability `log_sigma_r` was estimated. Additionally, because the operating model was built in SS3, the case study also serves as a cross-platform comparison: it provides a basis for evaluating the correspondence between the `opal` and SS3 population-dynamics calculations under identical inputs, and for comparing the spawning-biomass trajectory and parameter estimates from `opal` against the operating-model truth and the SS3 estimation model. As shown in @fig-paka-lf-biomass, `opal` reproduced the SS3 simulated spawning-biomass trajectory, demonstrating that the internal population dynamics engine is sound.
+
+Both `opal` models converged (@tbl-paka-lf-convergence) and completed standard error calculations fairly quickly (~`r round(as.numeric(paka$runtime, units = "secs"))` seconds for the fixed effects model, ~`r round(as.numeric(paka$runtime_re, units = "mins"))` minutes for the random effects model --- both of which were substantially faster than the ~6 minutes for the SS3 model) without any issues detected with regards to the gradient or Hessian and all parameters (including `log_sigma_r` in the random effects model) were identifiable according to `check_estimability()`. Using `RTMB`'s `simulate()` function it is possible to quickly generate simulated data from the fitted model. These simulates datasets can either be refit within the model (e.g., simulation self-testing) or used to generate posterior predictive distributions for the observed data. Using the commercial fishery index as an example, @fig-paka-cpue-ppc shows that the observed CPUE tended to fall within the posterior predictive distribution (Panels A & B); however, the PIT ECDF plot indicated the predictions to be overdispersed relative to the observations. This overdispersion makes sense given that the commercial fishery index was generated with negligible observation error and `RTMB`'s `simulate()` function incorporates both the full uncertainty (observation + process error) from the estimated model.
+
+The fixed effects model was also fitted with the Bayesian workflow (@sec-bayesian-inference): a dense-metric NUTS sampler was run for eight chains, which were well mixed with split-$\hat{R}$ close to one and large effective sample sizes for the scalar parameters and recruitment deviations (@tbl-paka-mcmc-diag, @fig-paka-mcmc-trace). The stock was then projected ten years forward under a constant catch held at the terminal year's level, propagating parameter uncertainty through both the MVN and MCMC approaches (@sec-projections). The two approaches agreed closely at the projection-start state, and the projection intervals widened only gradually because 'opakapaka is long-lived and matures slowly, so the existing adult biomass declines nearly deterministically under constant catch while future recruitment and selectivity uncertainty accumulate over the projection years (@fig-paka-projection).
+
+## 2020 western and central Pacific Ocean bigeye tuna {#sec-case-bet}
+
+The second case study used the data from a fleets-as-areas model described in the appendix of the 2020 assessment of bigeye tuna (*Thunnus obesus*) in the western and central Pacific Ocean [WCPO\;@ducharme-barth_stock_2020]. The bundled data object contained the biological parameters, catch and standardized CPUE observations, length and weight composition data, configured at a quarterly time step across the fisheries defined in the fleets-as-areas assessment, with selectivity specified by fishery as either logistic or double-normal forms.
+
+The diagnostic configuration used the quarterly standardized CPUE series as four seasonal indices, fitted length compositions from fisheries 8--14, and fitted weight compositions from fisheries 1, 2, 3, 4, 6, 7, and 15. Sensitivity runs indicated that the size-composition likelihoods pulled the absolute spawning-biomass scale below the SS3 and MFCL reference models, while posterior-predictive composition checks indicated uneven relative weighting among fisheries. The retained fit therefore used fishery-specific variance adjustments to the length-frequency (LF) and weight-frequency (WF) data sets. Weight compositions for fishery 5 remained inactive after diagnostic runs failed to converge cleanly. Recruitment deviations were estimated across the model period, catchability was estimated separately by quarterly index, and selected selectivity parameters were estimated for the fisheries with active composition data. Growth, natural mortality, steepness, recruitment variability, effort creep (assumed to be zero), and the remaining selectivity parameters were fixed at the bundled reference values. The quarterly catch history used by the model is shown by fishery and catch-unit group in @fig-bet-catch-weight and @fig-bet-catch-numbers.
+
+The final bigeye tuna (BET) model configuration converged according to `nlminb`, with a KKT-style[^1] projected gradient close to zero after accounting for active parameter bounds; the larger raw gradient is reported separately in @tbl-bet-fit-summary. Remaining active selectivity bounds are reported in @tbl-bet-selectivity-issues. Fitting this diagnostic configuration from the retained-cache starting values to the maximum-likelihood estimate took approximately `r bet_mle_runtime_text` on the workstation used to build this document; the final optimizer restart recorded `r bet_mle_iterations` iterations, `r bet_mle_function_evals` function evaluations, and `r bet_mle_gradient_evals` gradient evaluations. Hessian-based uncertainty was computed with `RTMB::sdreport()` using a supplied fixed-effect Hessian from `optimHess()` with a finite-difference step of $10^{-4}$; this Hessian was positive definite, with minimum eigenvalue `r signif(bet$diagnostics$biomass_uncertainty_min_hessian_eigenvalue, 3)`. The additive objective decomposition was still dominated numerically by the downweighted composition likelihoods, especially the weight-composition component, while the CPUE component contributed the abundance trend information and the recruitment-deviation density regularized quarterly departures from the stock-recruitment curve. The estimated unfished spawning biomass was approximately `r format(round(bet$report$B0), big.mark = ",")` mt, close to the MFCL implied scale of `r format(round(bet_mfcl_b0), big.mark = ",")` mt and closer to the SS3 fixed-selectivity scale of `r format(round(bet_ss3_fix_b0), big.mark = ",")` mt than an earlier higher-composition-weight diagnostic fit. The final-year relative spawning biomass was `r round(bet_final_sb_b0, 3)` when scaled by $SB_0$ (@tbl-bet-depletion). The dynamic depletion ratio was slightly lower (`r round(bet_final_dyn_dep, 3)`) because it uses the time-varying unfished spawning biomass denominator rather than the static $SB_0$ denominator.
+
+[^1]: Following the Karush–Kuhn–Tucker (KKT) conditions for bound-constrained optimization, gradient components at an active bound are not treated as evidence of non-convergence provided their sign is consistent with the constraint (e.g., pushing further against, rather than away from, the bound).
+
+An additional exploratory BET model was fitted after aggregating the 15 original fisheries to six fisheries using the grouped downweighted LF/WF configuration described above (@tbl-bet-agg6-grouping). This sensitivity was intended to test whether the many small fisheries were materially affecting the abundance scale or the CPUE fit, rather than to replace the retained diagnostic model. Under the six-fishery aggregation, $B_0$ was `r format(round(bet_agg6_metrics$B0), big.mark = ",")` mt and final-year $SB/SB_0$ was `r round(bet_agg6_final_sb_b0, 3)`, compared with `r format(round(bet$report$B0), big.mark = ",")` mt and `r round(bet_final_sb_b0, 3)` for the retained 15-fishery model (@tbl-bet-agg6-summary). The CPUE log-RMSE was also similar (`r sprintf("%.3f", bet_agg6_metrics$log_cpue_rmse)` for the six-fishery model versus `r sprintf("%.3f", bet_cpue_log_rmse)` for the retained model), and the six-fishery CPUE and biomass trajectories are included in @fig-bet-cpue-fit and @fig-bet-biomass. The six-fishery selectivity curves in @fig-bet-agg6-selectivity should be interpreted as pooled selectivities for the aggregation groups rather than direct replacements for the original fishery-specific curves.
+
+Diagnostic plots in the `opal` BET vignette compare observed and predicted CPUE by seasonal index, observed and predicted length and weight compositions, fitted recruitment deviations, and estimated selectivity-at-length and selectivity-at-age curves. The CPUE fit in @fig-bet-cpue-fit tracked the broad decline in standardized abundance from the early 1950s through the low-abundance period in the 2000s, while allowing the four quarterly indices to retain their own scale and observation uncertainty; simulated CPUE series from the fitted model showed the amount of variation expected under the fitted lognormal observation model. Additionally, illustrative fits to the same index from MFCL and SS3 models are also shown for reference. The CPUE OSA residuals in @fig-bet-osa-residuals were centred close to zero and fell within approximately $\pm 2$ residual units, but the Q-Q panels were clearly under-dispersed: standard deviation of normalised residuals (SDNRs) were below one for each index month and for all indices combined (@tbl-bet-cpue-sdnr). For the independent lognormal CPUE likelihood these OSA residuals are equivalent to standardized log residuals, so the flattened Q-Q pattern indicated that the fitted CPUE observation variance was larger than the residual variation, rather than a small number of large outliers [@dunn_randomized_1996; @thygesen_validation_2017]. The length- and weight-composition diagnostics in @fig-bet-lf-diagnostics and @fig-bet-wf-diagnostics sum variance-adjusted pseudo-counts over all years and independently simulate fitted row-level compositions before pooling those simulated counts within fishery. The corresponding grouped diagnostics for the six-fishery sensitivity are shown together in @fig-bet-agg6-composition-diagnostics using the same row-level pooling logic. To show the unaggregated temporal structure, @fig-bet-lf12-year-composition and @fig-bet-wf15-year-composition give year-specific examples for length-composition fishery 12 and weight-composition fishery 15. Example LF and WF composition OSA residual diagnostics are shown for fishery 12 and fishery 15 in @fig-bet-lf-composition-residuals and @fig-bet-wf-composition-residuals; these two panels are examples rather than the full residual set. The by-fishery Q-Q diagnostics in @fig-bet-composition-residual-qq summarise all active composition residuals against a fixed standard-normal reference line, rather than a fitted Q-Q line, so below-one dispersion remains visible; @fig-bet-agg6-composition-residual-qq repeats this Q-Q layout for the six-fishery grouped sensitivity using the same `compResidual::resMulti()` residual calculation on the grouped compositions. Following the diagnostic summaries commonly applied in CCSBT assessments of southern bluefin tuna, @tbl-bet-composition-sdnr reports finite bin-level OSA SDNRs generated with `r bet_comp_residual_source` for both the retained 15-fishery model and the matched six-fishery sensitivity. The near-one OSA SDNRs are conditional on the variance-adjusted input sample sizes used in the retained likelihood; the mean input $N$ by retained-model fishery ranges from `r signif(bet_comp_mean_input_n_range[1], 3)` to `r signif(bet_comp_mean_input_n_range[2], 3)` after downweighting. Because these variance adjustments produce fractional pseudo-counts, including sub-unit effective sample sizes for some rows, the multinomial composition likelihood in this diagnostic fit should be interpreted as a weighted pseudo-likelihood convention rather than a literal integer-count multinomial sampling model. The close Q-Q alignment is therefore a check of the randomized bin-level residual distribution for the weighted pseudo-data likelihood, not evidence that the raw composition data are perfectly fitted.
+
+The CPUE residual pattern supported reducing the fixed CPUE $\tau$ (additional observation standard deviation) and/or scaling the CPUE SEs down. The retained BET fits fixed $\tau$ at `r bet_cpue_fixed_tau_text` for all four CPUE indices; the only active CPUE parameters were the four catchability terms. Relative to the earlier cached run with $\tau = 0.1$, setting $\tau$ near zero reduced the mean CPUE standard deviation from 0.222 to 0.198, but increased the all-index CPUE SDNR only from 0.513 to `r round(bet$diagnostics$cpue_sdnr$SDNR[bet$diagnostics$cpue_sdnr$index == "All indices"], 3)`. Removing the fixed $\tau$ therefore helped only modestly and did not resolve the under-dispersion by itself. Further CPUE upweighting would require scaling the CPUE SEs down and should not be treated as an automatic tuning to SDNR = 1 without checking the consequences to the biomass estimates and composition fits.
+
+The selectivity diagnostics in @tbl-bet-selectivity-issues and @fig-bet-selectivity-length show where the fitted `opal` selectivity curves differ from both the MFCL and SS3 reference curves and which selectivity terms remain estimated in the final constrained map. Several weakly identified width terms were fixed at their SS3-initialized values to obtain stable Hessian-based uncertainty; @tbl-bet-selectivity-issues lists these fixed terms explicitly. The broader estimated-parameter blocks and their optimizer bounds are summarized in @tbl-bet-parameter-bounds. The recruitment deviations in @fig-bet-recruitment-deviations show the seasonal pattern of estimated process variation. The biomass and depletion trajectories in @fig-bet-biomass show the long-term decline in spawning biomass ($SB$), static ($SB/SB_0$), and dynamic depletion ($SB_t/SB_{t,F=0}$) for the retained and six-fishery `opal` models relative to MFCL and SS3 models fitted to the same data set. The retained `opal` uncertainty ribbon is the approximate 95% interval from the positive-definite supplied-Hessian `sdreport()` calculation.
+
+The `opal` spawning-biomass scale in @fig-bet-biomass in the retained downweighted fit was much closer to the SS3 and MFCL reference trajectories than initial model runs. However, a review of the document cache and the `opal` BET scripts suggests several relevant differences from the *equivalent* SS3 and MFCL models that could lead to differences in the `opal` estimated biomass scale. First, the double-normal `opal` selectivity curves are length-based (as opposed to age-based cubic splines in MFCL) and are converted through the PLA; the bundled double-normal width starts require conversion from a legacy SS3 scale to the current width scale, and diagnostic runs in the `opal` repository showed that biomass scale is sensitive to this selectivity scaling and map. Second, the fit used a simplified harvest-fraction removal calculation applied at the start of each timestep, no weight composition for fishery 5, and an intentionally downweighted size-composition likelihood. These differences can all change the vulnerable biomass implied by the same catch and CPUE data, so the absolute $SB$ comparison is best viewed as a diagnostic cross-platform check rather than a tuned stock-status result. As with the 'opakapaka example, these results are intended to demonstrate the end-to-end `opal` workflow as a proof-of-concept and do not reflect a carefully considered stock assessment model intended for management advice.
+
+# Discussion {#sec-discussion}
+
+`opal` provides an age-structured, length-based stock assessment framework implemented in RTMB, with a modular internal structure, support for multiple data types and likelihood forms, random-effects estimation, catch-based projections, Bayesian inference, and a set of built-in diagnostics. The two case studies demonstrate its application to fit length composition, weight composition, and index data in single-species assessments in both a simulated data context, where the truth is known, and with a real data tuna example. Both examples serve to highlight the successful proof-of-concept of the `opal` framework in its ability to adequately estimate population dynamics and easily provide high-quality diagnostic outputs for model evaluation and validation.
+
+The continued development of case-studies is central to the development of `opal`, with case studies serving multiple purposes: they provide a basis for testing and validating the model, they demonstrate the model's capabilities to the broader community, and they provide a starting point for new users to learn how to use the software. Additionally, new modules are added to the code base to meet the needs of the case studies as they arise. The integrated testing approach ensures that new modules do not break existing functionality, while safely providing a pathway to grow model functionality. Use of simulated data in case studies provides an objective basis for evaluating `opal`'s performance, and for cross-platform comparisons with existing software.
+
+One of the primary motivations for the development of `opal` was to enable the calculation of more recently developed statistical diagnostics that are either unavailable or challenging to calculate in existing software platforms such as SS3 or MFCL. The included case-studies serve to showcase and demonstrate some of these diagnostics that are readily calculated from an `opal` model fit. In both cases, the `check_estimability` function can be used to rapidly identify if the model has converged and if all parameters are identifiable. In the case of the bigeye tuna case study this led to the identification of a number of poorly determined selectivity parameters, which could subsequently be held fixed, and also prompted an investigation of a model with a simplified fisheries structure where all selectivity parameters were estimable. The 'opakapaka case study also demonstrated the use of the `simulate` function to generate posterior predictive distributions for the observed data in order to ascertain whether the model was able to adequately capture the observed data. Additionally, the bigeye tuna case study demonstrated the use of OSA residuals to evaluate the fit of the model to the observed data, and to identify potential issues with the model fit. The OSA residuals can be implicitly calculated as a by-product of the underlying RTMB framework, and are therefore readily available for any model fit.
+
+The other driving motivation for `opal` development was to facilitate the application and implementation of Bayesian inference within integrated assessment models. Bayesian inference provides a more holistic characterization of uncertainty in model estimates through the incorporation of prior information through parameter priors. This can have the additional benefit of stabilizing model estimates, as well as to allow the estimation of parameters that may otherwise be poorly determined. Doing so may allow analysts to move away from grids of alternative fixed parameters model runs to a more simplified model ensemble where uncertainty in key parameters is represented by their prior. Lastly, having a Bayesian stock assessment modelling framework readily available to analysts can formalize the inclusion of information from precursor, external analyses[^2] into the stock assessment model.
+
+[^2]: For example, the development of movement or population scale priors from external analyses, such as SEAPODYM [@lehodey_spatial_2008] or the DTU fine-scale movement model [@magnusson_scoping_2025], in a potential future spatially-explicit version of `opal`.
+
+As mentioned previously, one of the benefits of the case-study driven approach is the ability to conduct cross-platform comparisons with existing and well-established stock assessment software. In the 'opakapaka case study, the `opal` model was able to be closely configured to match the existing SS3 operating and estimation models. Though there are slight differences in the underlying population dynamics calculations[^3], the `opal` model was able to closely track the SS3 spawning biomass trajectory which demonstrates the viability of the `opal` population dynamics structure. Given that we had access to the 'known-truth' from simulated data, this provided further confidence in the ability of `opal` to accurately estimate population dynamics. The bigeye tuna case study also demonstrated the ability of `opal` to closely track the spawning biomass and depletion trajectories from both SS3 and MFCL, though there were some differences in the absolute scale of the spawning biomass. These differences are likely due to differences in selectivity parameterization, composition weighting, and catch removal calculations between the three platforms. The case studies also highlighted some of the challenges associated with fitting complex integrated assessment models, particularly when using real data where the underlying truth is unknown. These challenges include issues with parameter identifiability, sensitivity to model configuration, and the need for careful consideration of model diagnostics and outputs.
+
+[^3]: `opal` applies harvest rates at the start of each time step, while SS3 applies a continuous total mortality at the mid-point of each time step. Additionally, all biological calculations in SS3 are based on the population demographics at the mid-point of the time step. 
+
+While the case studies demonstrated `opal`'s ability to both successfully estimate population dynamics, and handle the data-volume and high-dimensionality of a real fisheries example[^4] they also identified numerous challenges, some still outstanding. Though the 'opakapaka case study demonstrated that `opal` was able to treat and estimate certain parameters as random effects, it resulted in a model that was substantially slower than the fixed effects model. It remains to be seen how this scales to higher dimensionality assessments as preliminary attempts to apply random effects in the bigeye tuna case study did not appear tractable[^5]. Similarly, while the `opal` model is now able to fairly rapidly converge to a solution in the highly dimensional bigeye tuna case study, this model begins optimization from fairly plausible initial values. Substantial time and effort went into developing both the plausible initial value set and the associated parameter bounds. Both SS3 and MFCL appear to more robustly converge from naive initial values so further work is warranted to improve the robustness of `opal`'s optimization. However, it is worth noting that both SS3 and MFCL estimate parameters in phases (MFCL has a fairly refined initialization sequence) which may contribute to their better optimization performance, while `opal` simultaneously estimates all parameters without phasing. Additionally, code optimization is still an active phase of development and several areas (e.g., length-weight conversion, selectivity parametrization, and size-composition) of the underlying `opal` model structure were re-factored during the development of the bigeye tuna case-study to improve the model performance. Further code optimization is likely needed to improve the speed and robustness of the model, particularly for high-dimensional assessments.
+
+In addition to the aforementioned issues, the real-world data that formed the basis for the bigeye tuna case study illustrated several further challenges. The initial richer selectivity maps were not fully estimable: several double-normal width and right-tail parameters were weakly identified, some ran to bounds, and Hessian-based uncertainty was not available until the $\log(B_0)$ lower bound was relaxed and selected weakly identified selectivity terms were fixed at their SS3-initialized values. The resulting model is therefore a constrained diagnostic fit rather than a fully tuned assessment. The case study also exposed practical issues that are common in integrated assessment models: the absolute biomass scale is sensitive to selectivity parameterization and composition weighting; the retained diagnostic fit used fishery-specific LF/WF variance adjustments to balance biomass scale and posterior-predictive composition variability; weight-composition fishery 5 was excluded after convergence diagnostics were poor; and the mixed catch units and quarterly time-step encoding require careful checks when comparing against SS3 and MFCL outputs. Finally, the size-composition residual diagnostics are computationally and statistically delicate because they operate on weighted pseudo-data likelihoods, so apparently good OSA residual behaviour must be interpreted alongside effective sample sizes, mean-composition diagnostics, and selectivity plausibility. This reinforces the need for continued development of both simulated and real-data case studies to ensure that the `opal` framework is robust and can be applied to a wide range of fisheries assessment scenarios.
+
+[^4]: In terms of population dynamics structure the BET case study uses 15 fisheries, 268 time-steps, 40 quarterly age-classes, 95 length-bins, and 200 weight-bins. There are 4 quarterly CPUE indices, and 2 composition types (1,194 WF instances and 568 LF instances). The model is therefore a high-dimensional integrated assessment model that is representative of the complexity of real-world fisheries assessments.
+
+[^5]: However, these attempts were made prior to certain code optimizations and reparametrizations in the selectivity and size-composition likelihood calculations, so it is possible that random effects estimation may be more tractable in future versions of `opal`.
+
+Despite the progress to date, `opal` is far from a finished product. As `opal` transitions into the next phase of development multiple rich avenues for continued work exist across several core areas: documentation, development of the user interface, model testing, code optimization, research, and feature development. This work extends beyond simply coding a technically-sound population dynamics model, but also encompasses managing the user experience so that `opal` is an accessible, easy to learn tool that does what is needed. Continued success will depend on both engagement and investment from the broader fisheries assessment community beyond the existing development team. Additionally, a focused and prioritized list of requirements is needed to inform the development pathway and to ensure that the resulting software meets the needs of the community. In the interim, several extensions are planned based on either existing feature lists [@punt_essential_2020] or the development team's experiences with `opal` to date. Areas identified for ongoing work include:
+
+- refinement of existing case studies; 
+- development of additional case studies (e.g., Indian Ocean yellowfin tuna fleets-as-areas case study based on simulated data);
+- code optimization (particularly of the selectivity and size-composition likelihood calculations);
+- derivation of biological and fishery reference points;
+- additional likelihood components (e.g., age, tag or close-kin mark-recapture data);
+- alternative selectivity forms;
+- and additional population dimensionality (e.g., spatial structure, sex, or length).
+
+Within the context of the WCPFC, `opal` could be applied to the upcoming assessment of north Pacific Ocean blue shark (*Prionace glauca*), or in a research capacity to the assessment of south Pacific albacore (*Thunnus alalunga*).
+
+The work so far demonstrates the proof of concept of the R-based modular development and has made significant development steps for core model components. We suggest that continued development of `opal` provides an option for the core development stream for the next generation of tuna assessment software and can provide alternative model features and structures that would be suitable for assessments of various species (e.g., tuna, shark and billfish) within the WCPFC or other regional fishery management organizations.
+
+# Acknowledgements {#sec-acknowledgements}
+
+Development of opal is intended to be an open and collaborative effort, inclusive to the broader fisheries assessment community. To that end we are grateful to the many people that contributed to the project through informal discussions, and participation in periodic update meetings. While not an exhaustive list, this community includes: N. Davies (Te Takina Ltd), S. Hoyle (Hoyle Consulting), M. Maunder (Inter-American Tropical Tuna Commission), R. Bi (IATTC), F. Carvalho (PIFSC), G. Pilling (SPC), J. Hampton (SPC *emeritus*), and many others including participants in the 2025 CAPAM mini workshop on developing the next generation tuna stock assessment model as well as the 2026 SPC Pre-Assessment Workshop. Development of `opal` has received funding support from *WCPFC Project 123: Scoping the next generation of tuna stock assessment software*.
+
+# Declaration of generative AI use {#sec-ai-declaration}
+
+Generative AI tools were used to assist with code development, refactoring, and documentation, and with drafting and editing text in this document. All analytical choices, model specifications, diagnostic interpretations, and conclusions are those of the authors, who reviewed and verified all AI-assisted output.
+
+# References {#sec-references}
+
+::: {#refs}
+:::
+
+\newpage
+
+# Tables {#sec-tables}
+
+```{r}
+#| label: tbl-paka-lf-convergence
+#| tbl-cap: "`opal` 'opakapaka model metrics: positive-definite Hessian, maximum absolute gradient (mgc), minimum Hessian eigenvalue, parameter estimability, runtime, number of parameters, and sigma R."
+#| echo: false
+
+est <- paka$estim
+est_re <- paka$estim_re
+
+if (inherits(est, "condition")) {
+  # check_estimability() failed and the condition was cached in Block B.
+  min_eig_chr  <- "\u2014"
+  estim_status <- paste0("check failed: ", conditionMessage(est))
+} else {
+  n_bad       <- length(est$WhichBad)
+  min_eig_chr <- formatC(min(est$Eigen$values), format = "e", digits = 2)
+  estim_status <- if (n_bad == 0) {
+    "0 (all parameters estimable)"
+  } else {
+    bad_names <- rownames(est$Hess)[est$WhichBad]
+    paste0(n_bad, " (", paste(bad_names, collapse = ", "), ")")
+  }
+}
+
+if (inherits(est_re, "condition")) {
+  # check_estimability() failed and the condition was cached in Block B.
+  min_eig_chr_re  <- "\u2014"
+  estim_status_re <- paste0("check failed: ", conditionMessage(est_re))
+} else {
+  n_bad_re       <- length(est_re$WhichBad)
+  min_eig_chr_re <- formatC(min(est_re$Eigen$values), format = "e", digits = 2)
+  estim_status_re <- if (n_bad_re == 0) {
+    "0 (all parameters estimable)"
+  } else {
+    bad_names_re <- rownames(est_re$Hess)[est_re$WhichBad]
+    paste0(n_bad_re, " (", paste(bad_names_re, collapse = ", "), ")")
+  }
+}
+
+paka_nll = paka$report$lp_prior + paka$report$lp_penalty + paka$report$lp_rec + paka$report$lp_init_rec + sum(paka$report$lp_cpue) + sum(paka$report$lp_lf) + sum(paka$report$lp_wf)
+
+paka_nll_re = paka$report_re$lp_prior + paka$report_re$lp_penalty + paka$report_re$lp_rec + paka$report_re$lp_init_rec + sum(paka$report_re$lp_cpue) + sum(paka$report_re$lp_lf) + sum(paka$report_re$lp_wf)
+
+conv_tbl <- data.frame(
+  Metric = c(
+                 "Positive-definite Hessian",
+                 "Max |gradient| (mgc)",
+                 "Min Hessian eigenvalue",
+                 "Inestimable parameters",
+                 "Runtime (seconds)",
+                 "N parameters (fixed)",
+                 "N parameters (random)",
+                 "sigma R"),
+  Value_fe = c(as.character(paka$pdh),
+            paka$mgc_sci,
+            min_eig_chr,
+            estim_status,
+            round(as.numeric(paka$runtime, units = "secs"),digits=2),
+            length(paka$par),
+            0,
+            paste0(round(exp(-0.6539265),digits=2), " (fixed)")),
+  Value_re = c(as.character(paka$pdh_re),
+            paka$mgc_sci_re,
+            min_eig_chr_re,
+            estim_status_re,
+            round(as.numeric(paka$runtime_re, units = "secs"),digits=2),
+            length(paka$par_re),
+            length(paka$par)-(length(paka$par_re)-1),
+            round(unname(exp(paka$par_re["log_sigma_r"])),digits=2)),
+  check.names = FALSE
+)
+colnames(conv_tbl) <- c("Metric", "opal", "opal (RE)")
+
+knitr::kable(conv_tbl, booktabs = TRUE, align = c("l", "l","l"))
+```
+
+```{r}
+#| label: tbl-paka-mcmc-diag
+#| tbl-cap: "Posterior summaries and MCMC convergence diagnostics for the 'opakapaka opal model: the MLE estimate, posterior mean and standard deviation, 5th and 95th percentiles, bulk and tail effective sample sizes (ESS), and split-Rhat, for the scalar parameters (unfished spawning biomass and the two CPUE catchabilities) and three representative recruitment deviations."
+#| echo: false
+
+mdiag <- paka$mcmc_diag
+knitr::kable(
+  mdiag[, c("variable", "mle", "mean", "sd", "q5", "q95",
+            "ess_bulk", "ess_tail", "rhat")],
+  col.names = c("Parameter", "MLE", "Mean", "SD", "q5", "q95",
+                "ESS bulk", "ESS tail", "Rhat"),
+  digits = 3, booktabs = TRUE, align = c("l", rep("r", 8))
+)
+```
+
+\newpage
+
+```{r}
+#| label: tbl-bet-fit-summary
+#| tbl-cap: "Optimization and objective-component summary for the fitted WCPO bigeye tuna diagnostic model and matched six-fishery aggregation sensitivity. The Max KKT gradient is the maximum projected gradient after accounting for active parameter bounds. Objective components are a switch-based additive audit at the fitted parameter vector: the baseline has CPUE, length-composition (LF), and weight-composition (WF) likelihood switches off, and the CPUE, LF, and WF rows are single-switch differences from that baseline."
+#| echo: false
+
+format_bet_value <- function(x, digits = 2) {
+  format(round(x, digits), big.mark = ",", nsmall = digits)
+}
+
+bet_fit_tbl <- data.frame(
+  Metric = c(
+    "nlminb convergence",
+    "Objective",
+    "Max |gradient|",
+    "Max KKT gradient",
+    "B0",
+    "Baseline contribution",
+    "CPUE contribution",
+    "LF contribution",
+    "WF contribution",
+    "Objective-component total"
+  ),
+  `15-fishery BET` = c(
+    bet$opt$convergence,
+    format_bet_value(bet$opt$objective),
+    round(bet$raw_grad, 4),
+    round(bet$kkt_grad, 4),
+    format(round(bet$report$B0), big.mark = ","),
+    format_bet_value(bet_objective_components["Baseline contribution"]),
+    format_bet_value(bet_objective_components["CPUE contribution"]),
+    format_bet_value(bet_objective_components["LF contribution"]),
+    format_bet_value(bet_objective_components["WF contribution"]),
+    format_bet_value(sum(bet_objective_components))
+  ),
+  `6-fishery BET` = c(
+    bet_agg6_metrics$convergence,
+    format_bet_value(bet_agg6_metrics$nll),
+    round(bet_agg6_metrics$raw_max_gradient, 4),
+    round(bet_agg6_metrics$kkt_max_gradient, 4),
+    format(round(bet_agg6_metrics$B0), big.mark = ","),
+    format_bet_value(bet_agg6_objective_components["Baseline contribution"]),
+    format_bet_value(bet_agg6_objective_components["CPUE contribution"]),
+    format_bet_value(bet_agg6_objective_components["LF contribution"]),
+    format_bet_value(bet_agg6_objective_components["WF contribution"]),
+    format_bet_value(sum(bet_agg6_objective_components))
+  ),
+  check.names = FALSE
+)
+
+knitr::kable(bet_fit_tbl, booktabs = TRUE, align = c("l", "r", "r"))
+```
+
+```{r}
+#| label: tbl-bet-depletion
+#| tbl-cap: "Final-year relative spawning-biomass diagnostics for the fitted WCPO bigeye tuna diagnostic model."
+#| echo: false
+
+bet_depletion_tbl <- data.frame(
+  Metric = c("SB/SB0", "SB/SB_F0"),
+  Value = round(c(bet_final_sb_b0, bet_final_dyn_dep), 3),
+  check.names = FALSE
+)
+
+knitr::kable(bet_depletion_tbl, booktabs = TRUE, align = c("l", "r"))
+```
+
+```{r}
+#| label: tbl-bet-cpue-sdnr
+#| tbl-cap: "Standard deviation of normalized residuals (SDNR) and median absolute residual (MAR) for CPUE residuals in the fitted WCPO bigeye tuna diagnostic model and matched six-fishery aggregation sensitivity."
+#| echo: false
+
+bet_cpue_sdnr_tbl <- bind_rows(
+  bet$diagnostics$cpue_sdnr %>% mutate(Model = "15F"),
+  bet_agg6_cpue_sdnr %>% mutate(Model = "6F")
+) %>%
+  transmute(
+    Model,
+    `Index month` = index,
+    n,
+    SDNR = round(SDNR, 3),
+    `95% LCI` = round(LCI, 3),
+    `95% HCI` = round(HCI, 3),
+    MAR = round(MAR, 3)
+  ) %>%
+  mutate(`Index month` = factor(
+    `Index month`,
+    levels = c("All indices", month.name[sort(unique(bet$data$cpue_data$month))])
+  )) %>%
+  arrange(`Index month`, Model) %>%
+  mutate(`Index month` = as.character(`Index month`))
+
+knitr::kable(bet_cpue_sdnr_tbl, booktabs = TRUE,
+             align = c("l", "l", "r", "r", "r", "r", "r"))
+```
+
+\clearpage
+
+```{r}
+#| label: tbl-bet-composition-sdnr
+#| tbl-cap: "Composition diagnostics by composition type and fishery for the fitted WCPO bigeye tuna diagnostic model and matched six-fishery aggregation sensitivity. OSA SDNR columns are finite bin-level `compResidual::resMulti()` residual summaries for both model configurations; the six-fishery residuals use grouped observed compositions and fitted grouped predictions from the raw sensitivity cache."
+#| echo: false
+
+fmt_tbl_num <- function(x, digits = 3) {
+  ifelse(is.finite(x), format(round(x, digits), nsmall = digits), "--")
+}
+fmt_tbl_ci <- function(lci, hci, digits = 3) {
+  ifelse(
+    is.finite(lci) & is.finite(hci),
+    sprintf(paste0("%.", digits, "f-%.", digits, "f"), lci, hci),
+    "--"
+  )
+}
+
+bet_comp_sdnr_tbl_15 <- bet_comp_diagnostic_summary %>%
+  transmute(
+    Model = "15F",
+    Composition = composition,
+    Fishery,
+    Rows = n_rows,
+    `OSA SDNR` = fmt_tbl_num(osa_sdnr),
+    `OSA 95% CI` = fmt_tbl_ci(osa_sdnr_lci, osa_sdnr_hci),
+    `Mean input N` = fmt_tbl_num(mean_input_n, 2),
+    `Prop. RMSE` = fmt_tbl_num(prop_rmse, 4),
+    `Mean size RMSE` = fmt_tbl_num(mean_size_rmse, 2),
+    `Mean size bias` = fmt_tbl_num(mean_size_bias, 2)
+  )
+
+bet_comp_sdnr_tbl_6 <- bet_agg6_comp_fit_summary %>%
+  transmute(
+    Model = "6F",
+    Composition = composition,
+    Fishery,
+    Rows = n_rows,
+    `OSA SDNR` = fmt_tbl_num(osa_sdnr),
+    `OSA 95% CI` = fmt_tbl_ci(osa_sdnr_lci, osa_sdnr_hci),
+    `Mean input N` = fmt_tbl_num(mean_input_n, 2),
+    `Prop. RMSE` = fmt_tbl_num(prop_rmse, 4),
+    `Mean size RMSE` = fmt_tbl_num(mean_size_rmse, 2),
+    `Mean size bias` = fmt_tbl_num(mean_size_bias, 2)
+  )
+
+bet_comp_sdnr_tbl <- bind_rows(bet_comp_sdnr_tbl_15, bet_comp_sdnr_tbl_6) %>%
+  mutate(
+    Composition = factor(Composition, levels = c("Length", "Weight")),
+    Model = factor(Model, levels = c("15F", "6F"))
+  ) %>%
+  arrange(Composition, Model, suppressWarnings(as.integer(sub(".* ([0-9]+)$", "\\1", Fishery))))
+
+bet_comp_sdnr_kable <- knitr::kable(
+  bet_comp_sdnr_tbl,
+  format = if (knitr::is_latex_output()) "latex" else "html",
+  booktabs = TRUE,
+  align = c("l", "l", "l", "r", "r", "r", "r", "r", "r", "r")
+)
+if (knitr::is_latex_output()) {
+  knitr::asis_output(paste0(
+    "\\begingroup\\scriptsize\\setlength{\\tabcolsep}{4pt}\n",
+    bet_comp_sdnr_kable,
+    "\n\\endgroup"
+  ))
+} else {
+  bet_comp_sdnr_kable
+}
+```
+
+```{r}
+#| label: tbl-bet-selectivity-issues
+#| tbl-cap: "Selectivity-parameter diagnostics by fishery for the fitted WCPO bigeye tuna diagnostic model. Estimated terms are estimated in the final constrained map; fixed terms were held at their SS3-initialized values. DN = double-normal. Bound flags identify any remaining estimated selectivity terms that are on parameter bounds."
+#| echo: false
+
+bet_sel_raw <- bet$diagnostics$selectivity_raw
+sel_short_component <- c(
+  "peak", "top", "asc. width", "desc. width", "initial sel.", "final sel."
+)
+bet_relevant_sel_cols <- function(sel_type) {
+  if (sel_type == 1L) c(1L, 2L) else c(1L, 3L, 4L)
+}
+bet_sel_map <- bet_sel_raw$map_sel
+bet_sel_pos <- which(names(bet_sel_raw$opt_par) == "par_sel")
+bet_sel_level_pos <- setNames(bet_sel_pos, as.character(seq_along(bet_sel_pos)))
+
+bet_sel_diag <- map_dfr(seq_len(nrow(bet_sel_map)), function(f) {
+  map_dfr(seq_len(ncol(bet_sel_map)), function(p) {
+    level <- as.character(bet_sel_map[f, p])
+    if (is.na(level)) return(tibble())
+    idx <- bet_sel_level_pos[[level]]
+    estimate <- bet_sel_raw$opt_par[idx]
+    lower <- bet_sel_raw$bounds$lower[idx]
+    upper <- bet_sel_raw$bounds$upper[idx]
+    bound_status <- case_when(
+      is.finite(lower) && estimate <= lower + 1e-7 ~ "lower",
+      is.finite(upper) && estimate >= upper - 1e-7 ~ "upper",
+      TRUE ~ "free"
+    )
+    tibble(
+      fishery = f,
+      Form = if_else(bet_sel_raw$sel_type_f[f] == 1L, "logistic", "DN"),
+      term = sel_short_component[p],
+      bound_status = bound_status
+    )
+  })
+})
+
+bet_selectivity_issues_tbl <- map_dfr(
+  sort(as.integer(names(bet_sel_raw$sel_specs))),
+  function(f) {
+    flags <- bet_sel_diag %>%
+      filter(fishery == f, bound_status != "free")
+    estimated_cols <- bet_sel_raw$sel_specs[[as.character(f)]]
+    fixed_cols <- setdiff(bet_relevant_sel_cols(bet_sel_raw$sel_type_f[f]), estimated_cols)
+    tibble(
+      Fishery = f,
+      Form = unique(bet_sel_diag$Form[bet_sel_diag$fishery == f]),
+      `Est. terms` = paste(sel_short_component[estimated_cols], collapse = ", "),
+      `Fixed terms` = if (length(fixed_cols) == 0L) {
+        "None"
+      } else {
+        paste(sel_short_component[fixed_cols], collapse = ", ")
+      },
+      `Bound flag` = if (nrow(flags) == 0L) {
+        "None"
+      } else {
+        paste(paste0(flags$term, " at ", flags$bound_status, " bound"),
+              collapse = "; ")
+      }
+    )
+  }
+)
+
+bet_selectivity_kable <- knitr::kable(
+  bet_selectivity_issues_tbl,
+  format = if (knitr::is_latex_output()) "latex" else "html",
+  booktabs = TRUE,
+  longtable = FALSE,
+  align = c("r", "l", "l", "l", "l")
+)
+
+bet_selectivity_kable
+```
+```{r}
+#| label: tbl-bet-parameter-bounds
+#| tbl-cap: "Estimated parameter blocks and optimizer bounds for the fitted WCPO bigeye tuna diagnostic model. Selectivity rows are summarized as a block because individual fishery terms are listed in the selectivity diagnostics table; recruitment deviations are summarized by their fitted range."
+#| echo: false
+
+format_bound_value <- function(x) {
+  case_when(
+    is.infinite(x) & x < 0 ~ "-Inf",
+    is.infinite(x) & x > 0 ~ "Inf",
+    TRUE ~ format(round(x, 3), nsmall = 3)
+  )
+}
+format_estimate_range <- function(x) {
+  paste(format(round(range(x, na.rm = TRUE), 3), nsmall = 3), collapse = " to ")
+}
+format_bound_range <- function(x) {
+  finite_x <- x[is.finite(x)]
+  if (!length(finite_x)) return("unbounded")
+  paste(format(round(range(finite_x), 3), nsmall = 3), collapse = " to ")
+}
+
+bet_opt_par <- bet_sel_raw$opt_par
+bet_bounds <- bet_sel_raw$bounds
+bet_par_months <- month.name[sort(unique(bet$data$cpue_data$month))]
+bet_logq_idx <- which(names(bet_opt_par) == "log_cpue_q")
+bet_logb0_idx <- which(names(bet_opt_par) == "log_B0")
+bet_parsel_idx <- which(names(bet_opt_par) == "par_sel")
+bet_rdev_idx <- which(names(bet_opt_par) == "rdev_y")
+
+bet_parameter_bounds_tbl <- bind_rows(
+  tibble(
+    Parameter = "log_B0",
+    n = 1L,
+    Estimate = paste0(
+      format(round(bet_opt_par[bet_logb0_idx], 3), nsmall = 3),
+      " (B0 = ", format(round(exp(bet_opt_par[bet_logb0_idx])), big.mark = ","), " mt)"
+    ),
+    Lower = format_bound_value(bet_bounds$lower[bet_logb0_idx]),
+    Upper = format_bound_value(bet_bounds$upper[bet_logb0_idx])
+  ),
+  map_dfr(seq_along(bet_logq_idx), function(i) {
+    idx <- bet_logq_idx[i]
+    tibble(
+      Parameter = paste0("log_cpue_q (", substr(bet_par_months[i], 1, 3), ")"),
+      n = 1L,
+      Estimate = format(round(bet_opt_par[idx], 3), nsmall = 3),
+      Lower = format_bound_value(bet_bounds$lower[idx]),
+      Upper = format_bound_value(bet_bounds$upper[idx])
+    )
+  }),
+  tibble(
+    Parameter = "par_sel",
+    n = length(bet_parsel_idx),
+    Estimate = format_estimate_range(bet_opt_par[bet_parsel_idx]),
+    Lower = format_bound_range(bet_bounds$lower[bet_parsel_idx]),
+    Upper = format_bound_range(bet_bounds$upper[bet_parsel_idx])
+  ),
+  tibble(
+    Parameter = "rdev_y",
+    n = length(bet_rdev_idx),
+    Estimate = format_estimate_range(bet_opt_par[bet_rdev_idx]),
+    Lower = format_bound_value(unique(bet_bounds$lower[bet_rdev_idx])),
+    Upper = format_bound_value(unique(bet_bounds$upper[bet_rdev_idx]))
+  )
+)
+
+bet_parameter_bounds_kable <- knitr::kable(
+  bet_parameter_bounds_tbl,
+  format = if (knitr::is_latex_output()) "latex" else "html",
+  booktabs = TRUE,
+  longtable = FALSE,
+  align = c("l", "r", "l", "l", "l")
+)
+
+bet_parameter_bounds_kable
+```
+
+\clearpage
+
+```{r}
+#| label: tbl-bet-agg6-grouping
+#| tbl-cap: "Six-fishery aggregation used in the exploratory WCPO bigeye tuna BET sensitivity. Original fisheries were pooled only where catch units and selectivity form remained compatible. Catch percentages are calculated separately within metric-ton and thousands-of-fish catch units."
+#| echo: false
+
+bet_agg6_grouping_tbl <- bet_agg6$grouping %>%
+  group_by(catch_units) %>%
+  mutate(percent_within_units = 100 * total_catch / sum(total_catch)) %>%
+  ungroup() %>%
+  transmute(
+    `Six-fishery group` = group,
+    `Original fisheries` = paste0("F", gsub(",", ", F", old_fisheries)),
+    `Catch units` = if_else(as.integer(catch_units) == 1L,
+                            "metric tons", "thousands of fish"),
+    `Selectivity form` = sel_type,
+    `Within-unit catch (%)` = sprintf("%.1f", percent_within_units)
+  )
+
+knitr::kable(bet_agg6_grouping_tbl, booktabs = TRUE,
+             align = c("r", "l", "l", "l", "r"))
+```
+
+```{r}
+#| label: tbl-bet-agg6-summary
+#| tbl-cap: "Comparison of the retained 15-fishery WCPO bigeye tuna diagnostic model and the matched six-fishery aggregation sensitivity. Objective values are omitted because the composition data are aggregated differently and therefore are not directly comparable."
+#| echo: false
+
+fmt_int <- function(x) format(round(x), big.mark = ",")
+bet_agg6_summary_tbl <- tibble(
+  Model = c("15F", "6F"),
+  Fisheries = c(15L, 6L),
+  `Base LF/WF downweight` = paste0(
+    c(bet_lfwf_downweight_mult, bet_agg6_lfwf_downweight_mult), "x"
+  ),
+  `B0 (mt)` = c(fmt_int(bet$report$B0), fmt_int(bet_agg6_metrics$B0)),
+  `Final SB/SB0` = sprintf("%.3f", c(bet_final_sb_b0, bet_agg6_final_sb_b0)),
+  `Final SB/SB_F0` = sprintf("%.3f", c(bet_final_dyn_dep, bet_agg6_final_dyn_dep)),
+  `CPUE log-RMSE` = sprintf("%.3f", c(bet_cpue_log_rmse, bet_agg6_metrics$log_cpue_rmse)),
+  `Max KKT gradient` = sprintf("%.4f", c(bet$kkt_grad, bet_agg6_metrics$kkt_max_gradient))
+)
+
+knitr::kable(bet_agg6_summary_tbl, booktabs = TRUE,
+             align = c("l", rep("r", 7)))
+```
+
+
+\newpage
+
+# Figures {#sec-figures}
+
+```{r}
+#| echo: false
+#| label: fig-paka-lf-biomass
+#| fig-cap: "Estimated spawning-biomass trajectory for the 'opakapaka `opal` model estimated using either fixed effects or random effects (RE) compared with the SS3 operating model (OM) and estimation model (EM), 1949--2023."
+#| fig-height: 4.5
+#| fig-width: 8
+calendar_years = paka$ssb$year
+paka_opal_fe = data.frame(model = rep("opal", length(calendar_years)),
+                          year = calendar_years,
+                          value = paka$sdreport$value[which(names(paka$sdreport$value) == "spawning_biomass_y")][1:length(calendar_years)],
+                          se = paka$sdreport$sd[which(names(paka$sdreport$value) == "spawning_biomass_y")][1:length(calendar_years)])
+paka_opal_fe$lo95 = paka_opal_fe$value - 1.96 * paka_opal_fe$se
+paka_opal_fe$hi95 = paka_opal_fe$value + 1.96 * paka_opal_fe$se
+
+paka_opal_re = data.frame(model = rep("opal (RE)", length(calendar_years)),
+                          year = calendar_years,
+                          value = paka$sdreport_re$value[which(names(paka$sdreport_re$value) == "spawning_biomass_y")][1:length(calendar_years)],
+                          se = paka$sdreport_re$sd[which(names(paka$sdreport_re$value) == "spawning_biomass_y")][1:length(calendar_years)])
+paka_opal_re$lo95 = paka_opal_re$value - 1.96 * paka_opal_re$se
+paka_opal_re$hi95 = paka_opal_re$value + 1.96 * paka_opal_re$se
+
+ybmax_lf <- max(paka$ssb$estimate, paka$om$SSB, paka$em$SSB, na.rm = TRUE)
+
+ggplot() +
+  geom_ribbon(data = paka_opal_fe,
+              aes(year, ymin = lo95, ymax = hi95, fill = model), alpha = 0.25) +
+  geom_ribbon(data = paka_opal_re,
+              aes(year, ymin = lo95, ymax = hi95, fill = model), alpha = 0.25) +
+  geom_line(data = paka_opal_fe,
+            aes(x = year, y = value, colour = "opal"),
+            linewidth = 1) +
+  geom_line(data = paka_opal_re,
+            aes(x = year, y = value, colour = "opal (RE)"),
+            linewidth = 1) +
+  geom_line(data = paka$om,
+            aes(x = Yr, y = SSB, colour = "SS3 OM"),
+            linewidth = 1, linetype = "dashed") +
+  geom_line(data = paka$em,
+            aes(x = Yr, y = SSB, colour = "SS3 EM"), linetype = "dotted", linewidth = 1) +
+  scale_colour_opal("Model",breaks = c("opal", "opal (RE)", "SS3 OM", "SS3 EM")) +
+  scale_fill_opal("Model", breaks = c("opal", "opal (RE)", "SS3 OM", "SS3 EM")) +
+  labs(x = "Year", y = "Spawning biomass", colour = NULL) +
+  scale_y_continuous(limits = c(0, ybmax_lf * 1.2)) +
+  theme_opal()
+```
+
+```{r}
+#| label: fig-paka-cpue-ppc
+#| fig-cap: "Posterior predictive checks using the `bayesplot` package for the 'opakapaka commercial CPUE index (fishery 1) under the opal model. Simulated replicates in aqua, observations in dark teal. Left to right: replicate trajectories, density overlay, and probability integral transform (PIT) empirical CDF (ECDF) calibration check."
+#| fig-width: 9
+#| fig-height: 7
+#| echo: false
+#| message: false
+#| warning: false
+
+nsims <- 50
+
+  mle_sims = as.data.frame(paka$sims_cpue[which(opaka_data$cpue_data$fishery==1),]) %>%
+  pivot_longer(cols = everything(), names_to = "sim", values_to = "cpue") %>%
+  filter(sim %in% sample(unique(sim), nsims))
+  mle_sims$x = sort(rep(opaka_data$cpue_data$year[which(opaka_data$cpue_data$fishery==1)],nsims))
+
+
+# --- opal palette wiring -----------------------------------------------------
+# bayesplot's 6 scheme slots run light -> dark:
+#   light / light_highlight  -> yrep replicate lines & PIT bands
+#   dark / dark_highlight     -> the observed y curve / ECDF line
+opal_sim <- "#7DD2DB"   # simulated replicates (aqua)
+opal_obs <- "#0E4049"   # observed (dark teal, emphasis)
+
+color_scheme_set(c(
+  opal_sim,   # light
+  "#5EBFCB",  # light_highlight
+  "#27A7BE",  # mid  (opal teal)
+  "#1F8B9E",  # mid_highlight
+  "#155F6B",  # dark
+  opal_obs    # dark_highlight
+))
+
+# --- data --------------------------------------------------------------------
+idx <- which(opaka_data$cpue_data$fishery == 1)
+
+y    <- log(opaka_data$cpue_data$value[idx])         # observed, log units
+yrep <- t(as.matrix(paka$sims_cpue[idx, ]))          # [draws x obs]
+
+# guard against NA columns (years without CPUE) that break density estimation
+ok   <- stats::complete.cases(t(yrep)) & !is.na(y)
+y    <- y[ok]
+yrep <- yrep[, ok, drop = FALSE]
+stopifnot(ncol(yrep) == length(y))
+
+set.seed(1)
+draws <- sample(nrow(yrep), min(nsims, nrow(yrep)))
+
+# --- panels ------------------------------------------------------------------
+p_dens <- ppc_dens_overlay(y, yrep[draws, , drop = FALSE]) +
+  ggplot2::ggtitle("CPUE density overlay") +
+  xlab("log(CPUE)") +
+  ylab("Density") +
+  theme_opal()
+
+p_pit <- ppc_pit_ecdf(y, yrep) +
+  ggplot2::ggtitle("PIT ECDF") +
+  theme_opal()
+
+p_traj <- ggplot() +
+  ylab("log(CPUE)") +
+  xlab("Year") +
+  geom_line(data = mle_sims, aes(x = x, y = cpue, group = sim),
+            colour = opal_sim, alpha = 0.4) +
+  geom_line(data = opaka_data$cpue_data[idx, ],
+            aes(x = year, y = log(value)),
+            colour = opal_obs, linewidth = 1.5, inherit.aes = FALSE) +
+  ggtitle("CPUE trajectories") +
+  theme_opal()
+
+p_traj + p_dens + p_pit +
+  plot_annotation(tag_levels = "A")
+```
+
+```{r}
+#| echo: false
+#| label: fig-paka-mcmc-trace
+#| fig-cap: "MCMC traces for the scalar parameters of the 'opakapaka opal (with LF) model --- unfished spawning biomass and the two CPUE catchabilities, on the log scale --- across eight chains (colours). Navy dashed lines mark the MLE. Overlapping, stationary chains indicate good mixing."
+#| fig-height: 5
+#| fig-width: 8
+
+ggplot(paka$mcmc_trace, aes(iter, value, colour = chain)) +
+  geom_line(linewidth = 0.3, alpha = 0.7) +
+  geom_hline(data = paka$mcmc_mle_ref, aes(yintercept = mle),
+             linetype = "dashed", colour = opal_cols["navy"], linewidth = 0.5) +
+  facet_wrap(~ param, scales = "free_y", ncol = 1) +
+  scale_colour_manual(values = opal_chains) +
+  labs(x = "Post-warmup iteration", y = "Value", colour = "Chain") +
+  theme_opal()
+```
+
+```{r}
+#| echo: false
+#| label: fig-paka-projection
+#| fig-cap: "'Opakapaka spawning biomass: historical uncertainty and a 10-year constant-catch projection (200 draws per method); the last 60 years are shown. Teal solid = estimated MLE; grey dashed = SS3 operating model; navy = SS3 estimation model. Coloured ribbons give the 50% (darker) and 90% (lighter) intervals for the MVN and MCMC approaches, and the amber line is the MCMC historical median. The vertical dashed line marks the end of the historical period (2024)."
+#| fig-height: 4.5
+#| fig-width: 8
+
+ggplot() +
+  geom_ribbon(data = paka$proj_hist_ribbon,
+              aes(year, ymin = lo90, ymax = hi90, fill = method), alpha = 0.12) +
+  geom_ribbon(data = paka$proj_hist_ribbon,
+              aes(year, ymin = lo50, ymax = hi50, fill = method), alpha = 0.25) +
+  geom_line(data = subset(paka$proj_hist_ribbon, method == "MCMC"),
+            aes(year, med, colour = method), linewidth = 0.75) +
+  geom_line(data = paka$proj_hist_mle, aes(year, sbio),
+            colour = opal_proj["MVN"], linewidth = 0.9) +
+  geom_line(data = paka$proj_om, aes(Yr, SSB),
+            colour = opal_cols["truth"], linewidth = 0.8, linetype = "dashed") +
+  geom_line(data = paka$proj_em, aes(Yr, SSB),
+            colour = opal_cols["navy"], linewidth = 0.8) +
+  geom_vline(xintercept = 2024, linetype = "dashed", colour = "grey50") +
+  geom_ribbon(data = paka$proj_ribbon,
+              aes(year, ymin = lo90, ymax = hi90, fill = method), alpha = 0.15) +
+  geom_ribbon(data = paka$proj_ribbon,
+              aes(year, ymin = lo50, ymax = hi50, fill = method), alpha = 0.30) +
+  geom_line(data = paka$proj_ribbon, aes(year, med, colour = method),
+            linewidth = 1) +
+  scale_fill_manual(values = opal_proj) +
+  scale_colour_manual(values = opal_proj) +
+  labs(x = "Year", y = "Spawning biomass", colour = "Method", fill = "Method") +
+  theme_opal()
+```
+
+```{r}
+#| echo: false
+#| label: prep-bet-catch-by-fishery
+
+bet_catch_by_fishery <- bet$diagnostics$catch_by_fishery
+if (is.null(bet_catch_by_fishery)) {
+  stop("BET catch-by-fishery diagnostics are not available in the cached results")
+}
+
+bet_catch_by_fishery <- bet_catch_by_fishery %>%
+  mutate(
+    fishery_num = as.integer(fishery),
+    Fishery = factor(paste("Fishery", fishery_num),
+                     levels = paste("Fishery", sort(unique(fishery_num))))
+  )
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-catch-weight
+#| fig-cap: "Observed quarterly catch for WCPO bigeye tuna fisheries with catch recorded in metric tons. Facets use a common y-axis scale across the weight-catch fisheries."
+#| fig-height: 4.8
+#| fig-width: 8
+
+ggplot(filter(bet_catch_by_fishery, units == "weight"),
+       aes(x = decimal_year, y = catch)) +
+  geom_col(width = 0.18, fill = opal_cols["teal"], alpha = 0.8) +
+  facet_wrap(~ Fishery, ncol = 4, scales = "fixed") +
+  scale_x_continuous(breaks = scales::breaks_pretty(n = 4)) +
+  scale_y_continuous(
+    labels = scales::label_comma(),
+    limits = c(0, NA),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(x = "Year", y = "Catch (metric tons)") +
+  theme_opal(base_size = 9) +
+  theme(
+    axis.text.x = element_text(size = 6),
+    strip.text = element_text(size = 7)
+  )
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-catch-numbers
+#| fig-cap: "Observed quarterly catch for WCPO bigeye tuna fisheries with catch recorded in thousands of fish. Facets use a common y-axis scale across the numbers-catch fisheries."
+#| fig-height: 4.8
+#| fig-width: 8
+
+ggplot(filter(bet_catch_by_fishery, units == "numbers"),
+       aes(x = decimal_year, y = catch)) +
+  geom_col(width = 0.18, fill = opal_cols["teal"], alpha = 0.8) +
+  facet_wrap(~ Fishery, ncol = 4, scales = "fixed") +
+  scale_x_continuous(breaks = scales::breaks_pretty(n = 4)) +
+  scale_y_continuous(
+    labels = scales::label_comma(),
+    limits = c(0, NA),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(x = "Year", y = "Catch (thousands of fish)") +
+  theme_opal(base_size = 9) +
+  theme(
+    axis.text.x = element_text(size = 6),
+    strip.text = element_text(size = 7)
+  )
+```
+
+
+```{r}
+#| echo: false
+#| label: fig-bet-cpue-fit
+#| fig-cap: "Observed, predicted, and simulated standardized CPUE for the fitted `opal` WCPO bigeye tuna diagnostic model, shown by index month. Vertical error bars show one fitted standard deviation on the log scale; light teal lines show fitted-model simulations from the retained 15-fishery model. The matched six-fishery aggregation sensitivity and illustrative fits by MFCL and SS3 are also shown. The RMSE of the log-residuals is shown for each model and index month."
+#| fig-height: 4.5
+#| fig-width: 8
+
+bet_cpue <- bet$data$cpue_data %>%
+  mutate(
+    index = factor(month,
+                   levels = sort(unique(month)),
+                   labels = month.name[sort(unique(month))]),
+    pred = bet$report$cpue_pred,
+    sigma = bet$report$cpue_sigma,
+    lower = exp(log(value) - sigma),
+    upper = exp(log(value) + sigma)
+  )
+
+bet_cpue_sim <- bet$report$cpue_sim %>%
+  mutate(
+    index = factor(month,
+                   levels = sort(unique(month)),
+                   labels = month.name[sort(unique(month))]),
+    simulated = exp(simulated_log)
+  )
+
+# load xmodel
+bet_xmodel_cpue <- readRDS(file.path("cached", "bet", "wcpo_bet_xmodel_cpue.rds"))
+
+# lookup table to translate ts -> year/month/index (same for all models)
+ts_lookup <- bet_cpue %>%
+  distinct(ts, year, month, index)
+
+xmodel_cpue_long <- bet_xmodel_cpue %>%
+  filter(id %in% c("mfcl-v11", "02-fix-sel")) %>%
+  mutate(model = recode(id, "mfcl-v11" = "MFCL", "02-fix-sel" = "SS3")) %>%
+  left_join(ts_lookup, by = c("Time" = "ts")) %>%
+  transmute(
+    year, month, index,
+    pred  = Exp,
+    value = Obs,
+    sigma = SE,
+    lower = exp(log(value) - sigma),
+    upper = exp(log(value) + sigma),
+    model
+  )
+
+bet_cpue$model <- "opal"
+
+bet_agg6_cpue_long <- bet_agg6$cpue %>%
+  transmute(
+    year, month,
+    index = factor(index_month, levels = levels(bet_cpue$index)),
+    pred,
+    value,
+    sigma = log(upper) - log(value),
+    lower,
+    upper,
+    model = "6-fishery opal"
+  )
+
+bet_cpue_combined <- bind_rows(bet_cpue, bet_agg6_cpue_long, xmodel_cpue_long)
+
+# calculate goodness-of-fit metrics for each model and index
+cpue_gof <- bet_cpue_combined %>%
+  mutate(log_resid = log(value) - log(pred)) %>%
+  group_by(index, model) %>%
+  summarise(
+    n     = n(),
+    rmse  = sqrt(mean(log_resid^2)),
+    .groups = "drop"
+  ) %>%
+  arrange(index, rmse) %>%
+  select(index, model, rmse) %>%
+  pivot_wider(names_from = model, values_from = rmse)
+
+# long-format RMSE labels for plotting (one row per index/model)
+cpue_gof_labels <- bet_cpue_combined %>%
+  mutate(log_resid = log(value) - log(pred)) %>%
+  group_by(index, model) %>%
+  summarise(rmse = sqrt(mean(log_resid^2)), .groups = "drop") %>%
+  mutate(label = paste0(model, ": ", sprintf("%.3f", rmse))) %>%
+  left_join(
+    tibble(
+      model = c("opal", "6-fishery opal", "SS3", "MFCL"),
+      vjust = c(1.5, 3.0, 4.5, 6.0)
+    ),
+    by = "model"
+  )
+
+ggplot(bet_cpue_combined, aes(x = year)) +
+  geom_line(data = bet_cpue_sim,
+            aes(y = simulated, group = sim_id),
+            colour = opal_role["simulated"], alpha = 0.5, linewidth = 0.32) +
+  geom_errorbar(data = filter(bet_cpue_combined, model == "opal"),
+                aes(ymin = lower, ymax = upper), width = 0.35,
+                colour = "grey20", alpha = 0.85, linewidth = 0.3) +
+  geom_point(data = filter(bet_cpue_combined, model == "opal"),
+             aes(y = value), shape = 21, size = 1.25,
+             fill = "white", colour = "black", stroke = 0.25) +
+  geom_line(aes(y = pred, colour = model), linewidth = 0.8) +
+  geom_text(data = cpue_gof_labels,
+            aes(x = Inf, y = Inf, label = label, colour = model, vjust = vjust),
+            hjust = 1.1, size = 2.6,
+            inherit.aes = FALSE, show.legend = FALSE) +
+  facet_wrap(~ index, scales = "free_y", ncol = 2) +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  scale_colour_opal(breaks = c("opal", "6-fishery opal", "SS3", "MFCL")) +
+  labs(x = "Year", y = "Standardized CPUE", colour = "Model") +
+  theme_opal()
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-osa-residuals
+#| fig-cap: "OSA residual diagnostics for the CPUE component of the fitted WCPO bigeye tuna diagnostic model, shown by index month. For this independent lognormal CPUE likelihood, the OSA residuals are equivalent to standardized log residuals; the flattened Q-Q pattern shows under-dispersion relative to the fitted CPUE observation variance."
+#| fig-height: 5
+#| fig-width: 8
+
+bet_osa <- bet$data$cpue_data %>%
+  mutate(
+    residual = bet$report$osa_cpue_residual,
+    index = factor(month,
+                   levels = sort(unique(month)),
+                   labels = month.name[sort(unique(month))])
+  )
+
+bet_osa_qq <- bet_osa %>%
+  group_by(index) %>%
+  arrange(residual, .by_group = TRUE) %>%
+  mutate(
+    q_theoretical = qnorm(ppoints(n())),
+    panel = "Normal Q-Q"
+  ) %>%
+  ungroup() %>%
+  transmute(index, panel, x = q_theoretical, y = residual)
+
+bet_osa_time <- bet_osa %>%
+  transmute(index, panel = "Residual by year", x = year, y = residual)
+
+ggplot(bind_rows(bet_osa_qq, bet_osa_time), aes(x = x, y = y)) +
+  geom_hline(yintercept = 0, colour = "grey55", linewidth = 0.35) +
+  geom_hline(yintercept = c(-2, 2), linetype = "dashed",
+             colour = "grey55", linewidth = 0.35) +
+  geom_abline(data = data.frame(panel = "Normal Q-Q"),
+              aes(intercept = 0, slope = 1),
+              inherit.aes = FALSE, colour = "grey55", linewidth = 0.35) +
+  geom_segment(data = bet_osa_time,
+               aes(x = x, xend = x, y = 0, yend = y),
+               inherit.aes = FALSE, colour = "grey65", linewidth = 0.25) +
+  geom_point(size = 0.9, alpha = 0.75, colour = "black") +
+  facet_grid(index ~ panel, scales = "free_x") +
+  labs(x = NULL, y = "OSA residual") +
+  theme_opal()
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-lf-diagnostics
+#| fig-cap: "Observed, predicted, and simulated length-composition proportions for WCPO bigeye tuna fisheries 8-14, summed over all years using the variance-adjusted effective sample sizes. Each simulated line independently simulates the fitted row-level compositions and then pools those simulated counts over all years within fishery."
+#| fig-height: 7
+#| fig-width: 8
+
+bet_lf_pred <- bet$report$lf_pred
+names(bet_lf_pred) <- bet$data$lf_fishery_f
+for (k in seq_along(bet_lf_pred)) {
+  colnames(bet_lf_pred[[k]]) <- bet$data$len_mid
+}
+
+bet_lf_rows <- bet_prediction_rows(
+  bet_lf_pred,
+  bet$data$lf_fishery_f,
+  bet$data$lf_fishery,
+  bet$data$lf_n
+)
+
+set.seed(100912)
+bet_lf_mean <- bind_rows(
+  bet_weighted_comp_summary(
+    as.matrix(bet$data$lf_obs_in),
+    bet$data$len_mid,
+    as.numeric(bet$data$lf_n),
+    bet$data$lf_fishery
+  ) %>%
+    transmute(
+      fishery = paste("Fishery", .group),
+      length = bin,
+      proportion,
+      series = "Observed"
+    ),
+  bet_weighted_comp_summary(
+    bet_lf_rows$pred,
+    bet$data$len_mid,
+    bet_lf_rows$n_eff,
+    bet_lf_rows$fishery
+  ) %>%
+    transmute(
+      fishery = paste("Fishery", .group),
+      length = bin,
+      proportion,
+      series = "Predicted"
+    )
+)
+
+bet_lf_sim_df <- bet_simulate_pooled_composition(
+  bet_lf_rows$pred,
+  bet$data$len_mid,
+  bet_lf_rows$n_eff,
+  bet_lf_rows$fishery,
+  nsim = 20L
+) %>%
+  transmute(
+    fishery = paste("Fishery", .group),
+    length = bin,
+    proportion,
+    sim_id
+  )
+
+bet_fishery_levels <- paste("Fishery", sort(unique(bet$data$wcpo_bet_lf$fishery)))
+bet_lf_mean <- bet_lf_mean %>%
+  mutate(fishery = factor(fishery, levels = bet_fishery_levels))
+bet_lf_sim_df <- bet_lf_sim_df %>%
+  mutate(fishery = factor(fishery, levels = bet_fishery_levels))
+bet_lf_total_neff <- tibble(
+  fishery = paste("Fishery", bet$data$lf_fishery),
+  effective_n = as.numeric(bet$data$lf_n)
+) %>%
+  group_by(fishery) %>%
+  summarise(effective_n = sum(effective_n, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    fishery = factor(fishery, levels = bet_fishery_levels),
+    label = sprintf("Total Neff = %.1f", effective_n)
+  )
+
+ggplot() +
+  geom_col(data = filter(bet_lf_mean, series == "Observed"),
+           aes(x = length, y = proportion), fill = opal_role["observed"], width = 1.8) +
+  geom_line(data = bet_lf_sim_df,
+            aes(x = length, y = proportion, group = sim_id),
+            colour = opal_role["simulated"], alpha = 0.35, linewidth = 0.35) +
+  geom_line(data = filter(bet_lf_mean, series == "Predicted"),
+            aes(x = length, y = proportion), colour = opal_role["fitted"], linewidth = 0.8) +
+  geom_text(data = bet_lf_total_neff,
+            aes(x = Inf, y = Inf, label = label),
+            hjust = 1.05, vjust = 1.25, size = 2.5,
+            inherit.aes = FALSE) +
+  facet_wrap(~ fishery, ncol = 2, scales = "free_y") +
+  labs(x = "Length (cm)", y = "Pooled proportion") +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  theme_opal()
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-wf-diagnostics
+#| fig-cap: "Observed, predicted, and simulated weight-composition proportions for active WCPO bigeye tuna weight-composition fisheries, summed over all years using the variance-adjusted effective sample sizes. Each simulated line independently simulates the fitted row-level compositions and then pools those simulated counts over all years within fishery."
+#| fig-height: 7
+#| fig-width: 8
+
+bet_wf_pred <- bet$report$wf_pred
+names(bet_wf_pred) <- bet$data$wf_fishery_f
+for (k in seq_along(bet_wf_pred)) {
+  colnames(bet_wf_pred[[k]]) <- bet$data$wt_mid
+}
+
+bet_wf_rows <- bet_prediction_rows(
+  bet_wf_pred,
+  bet$data$wf_fishery_f,
+  bet$data$wf_fishery,
+  bet$data$wf_n
+)
+
+set.seed(101015)
+bet_wf_mean <- bind_rows(
+  bet_weighted_comp_summary(
+    as.matrix(bet$data$wf_obs_in),
+    bet$data$wt_mid,
+    as.numeric(bet$data$wf_n),
+    bet$data$wf_fishery
+  ) %>%
+    transmute(
+      fishery = paste("Fishery", .group),
+      weight = bin,
+      proportion,
+      series = "Observed"
+    ),
+  bet_weighted_comp_summary(
+    bet_wf_rows$pred,
+    bet$data$wt_mid,
+    bet_wf_rows$n_eff,
+    bet_wf_rows$fishery
+  ) %>%
+    transmute(
+      fishery = paste("Fishery", .group),
+      weight = bin,
+      proportion,
+      series = "Predicted"
+    )
+)
+
+bet_wf_sim_df <- bet_simulate_pooled_composition(
+  bet_wf_rows$pred,
+  bet$data$wt_mid,
+  bet_wf_rows$n_eff,
+  bet_wf_rows$fishery,
+  nsim = 20L
+) %>%
+  transmute(
+    fishery = paste("Fishery", .group),
+    weight = bin,
+    proportion,
+    sim_id
+  )
+
+bet_wf_fishery_levels <- paste("Fishery", sort(unique(bet$data$wf_fishery_f)))
+bet_wf_mean <- bet_wf_mean %>%
+  mutate(fishery = factor(fishery, levels = bet_wf_fishery_levels))
+bet_wf_sim_df <- bet_wf_sim_df %>%
+  mutate(fishery = factor(fishery, levels = bet_wf_fishery_levels))
+bet_wf_total_neff <- tibble(
+  fishery = paste("Fishery", bet$data$wf_fishery),
+  effective_n = as.numeric(bet$data$wf_n)
+) %>%
+  group_by(fishery) %>%
+  summarise(effective_n = sum(effective_n, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    fishery = factor(fishery, levels = bet_wf_fishery_levels),
+    label = sprintf("Total Neff = %.1f", effective_n)
+  )
+
+ggplot() +
+  geom_col(data = filter(bet_wf_mean, series == "Observed"),
+           aes(x = weight, y = proportion), fill = opal_role["observed"], width = 1.8) +
+  geom_line(data = bet_wf_sim_df,
+            aes(x = weight, y = proportion, group = sim_id),
+            colour = opal_role["simulated"], alpha = 0.35, linewidth = 0.35) +
+  geom_line(data = filter(bet_wf_mean, series == "Predicted"),
+            aes(x = weight, y = proportion), colour = opal_role["fitted"], linewidth = 0.8) +
+  geom_text(data = bet_wf_total_neff,
+            aes(x = Inf, y = Inf, label = label),
+            hjust = 1.05, vjust = 1.25, size = 2.5,
+            inherit.aes = FALSE) +
+  facet_wrap(~ fishery, ncol = 2, scales = "free_y") +
+  labs(x = "Weight (kg)", y = "Pooled proportion") +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  theme_opal()
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-agg6-composition-diagnostics
+#| fig-cap: "Observed, predicted, and simulated composition proportions for the matched six-fishery WCPO bigeye tuna aggregation sensitivity, summed over all years using the variance-adjusted effective sample sizes. Length-composition groups are shown for groups 1--4 and weight-composition groups for groups 5--6; facet labels identify the original BET fisheries pooled into each group. Each simulated line independently simulates the fitted row-level compositions and then pools those simulated counts over all years within group."
+#| fig-height: 6.4
+#| fig-width: 8
+
+set.seed(6010)
+
+bet_agg6_lf_rows <- bet_prediction_rows(
+  bet_agg6_report$lf_pred,
+  bet_agg6_data$lf_fishery_f,
+  bet_agg6_data$lf_fishery,
+  bet_agg6_data$lf_n
+)
+bet_agg6_wf_rows <- bet_prediction_rows(
+  bet_agg6_report$wf_pred,
+  bet_agg6_data$wf_fishery_f,
+  bet_agg6_data$wf_fishery,
+  bet_agg6_data$wf_n
+)
+
+bet_agg6_comp_mean <- bind_rows(
+  bet_weighted_comp_summary(
+    as.matrix(bet_agg6_data$lf_obs_in),
+    bet_agg6_data$len_mid,
+    as.numeric(bet_agg6_data$lf_n),
+    bet_agg6_data$lf_fishery
+  ) %>%
+    transmute(
+      fishery = .group,
+      bin,
+      proportion,
+      series = "Observed",
+      composition = "Length composition"
+    ),
+  bet_weighted_comp_summary(
+    bet_agg6_lf_rows$pred,
+    bet_agg6_data$len_mid,
+    bet_agg6_lf_rows$n_eff,
+    bet_agg6_lf_rows$fishery
+  ) %>%
+    transmute(
+      fishery = .group,
+      bin,
+      proportion,
+      series = "Predicted",
+      composition = "Length composition"
+    ),
+  bet_weighted_comp_summary(
+    as.matrix(bet_agg6_data$wf_obs_in),
+    bet_agg6_data$wt_mid,
+    as.numeric(bet_agg6_data$wf_n),
+    bet_agg6_data$wf_fishery
+  ) %>%
+    transmute(
+      fishery = .group,
+      bin,
+      proportion,
+      series = "Observed",
+      composition = "Weight composition"
+    ),
+  bet_weighted_comp_summary(
+    bet_agg6_wf_rows$pred,
+    bet_agg6_data$wt_mid,
+    bet_agg6_wf_rows$n_eff,
+    bet_agg6_wf_rows$fishery
+  ) %>%
+    transmute(
+      fishery = .group,
+      bin,
+      proportion,
+      series = "Predicted",
+      composition = "Weight composition"
+    )
+) %>%
+  left_join(bet_agg6_group_labels, by = "fishery") %>%
+  mutate(
+    panel = paste0(composition, "\n", group_label),
+    panel = factor(panel, levels = unique(panel))
+  )
+
+bet_agg6_comp_sim <- bind_rows(
+  bet_simulate_pooled_composition(
+    bet_agg6_lf_rows$pred,
+    bet_agg6_data$len_mid,
+    bet_agg6_lf_rows$n_eff,
+    bet_agg6_lf_rows$fishery,
+    nsim = 20L
+  ) %>%
+    transmute(
+      fishery = .group,
+      bin,
+      proportion,
+      sim_id,
+      composition = "Length composition"
+    ),
+  bet_simulate_pooled_composition(
+    bet_agg6_wf_rows$pred,
+    bet_agg6_data$wt_mid,
+    bet_agg6_wf_rows$n_eff,
+    bet_agg6_wf_rows$fishery,
+    nsim = 20L
+  ) %>%
+    transmute(
+      fishery = .group,
+      bin,
+      proportion,
+      sim_id,
+      composition = "Weight composition"
+    )
+) %>%
+  left_join(bet_agg6_group_labels, by = "fishery") %>%
+  mutate(
+    panel = paste0(composition, "\n", group_label),
+    panel = factor(panel, levels = levels(bet_agg6_comp_mean$panel))
+  )
+
+bet_agg6_total_neff <- bind_rows(
+  tibble(fishery = bet_agg6_data$lf_fishery,
+         effective_n = as.numeric(bet_agg6_data$lf_n),
+         composition = "Length composition"),
+  tibble(fishery = bet_agg6_data$wf_fishery,
+         effective_n = as.numeric(bet_agg6_data$wf_n),
+         composition = "Weight composition")
+) %>%
+  group_by(composition, fishery) %>%
+  summarise(effective_n = sum(effective_n, na.rm = TRUE), .groups = "drop") %>%
+  left_join(bet_agg6_group_labels, by = "fishery") %>%
+  mutate(
+    panel = paste0(composition, "\n", group_label),
+    panel = factor(panel, levels = levels(bet_agg6_comp_mean$panel)),
+    label = sprintf("Total Neff = %.1f", effective_n)
+  )
+
+ggplot() +
+  geom_col(data = filter(bet_agg6_comp_mean, series == "Observed"),
+           aes(x = bin, y = proportion),
+           fill = opal_role["observed"], width = 1.8) +
+  geom_line(data = bet_agg6_comp_sim,
+            aes(x = bin, y = proportion, group = sim_id),
+            colour = opal_role["simulated"], alpha = 0.35, linewidth = 0.32) +
+  geom_line(data = filter(bet_agg6_comp_mean, series == "Predicted"),
+            aes(x = bin, y = proportion),
+            colour = opal_role["fitted"], linewidth = 0.75) +
+  geom_text(data = bet_agg6_total_neff,
+            aes(x = Inf, y = Inf, label = label),
+            hjust = 1.05, vjust = 1.25, size = 2.25,
+            inherit.aes = FALSE) +
+  facet_wrap(~ panel, ncol = 2, scales = "free_y") +
+  labs(x = "Composition bin", y = "Pooled proportion") +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  theme_opal(base_size = 8.5) +
+  theme(strip.text = element_text(size = 6.5))
+```
+
+```{r}
+#| echo: false
+#| include: false
+#| label: prep-bet-year-composition
+
+select_panel_years <- function(years, max_years) {
+  years <- sort(unique(years))
+  if (length(years) <= max_years) return(years)
+  years[unique(round(seq(1, length(years), length.out = max_years)))]
+}
+
+simulate_year_composition <- function(pred_matrix, bins, n_eff, year, bin_col,
+                                      nsim = 12L) {
+  bet_simulate_pooled_composition(
+    pred_matrix = pred_matrix,
+    bins = bins,
+    n_eff = n_eff,
+    group = year,
+    nsim = nsim
+  ) %>%
+    transmute(
+      year = .group,
+      !!bin_col := bin,
+      proportion,
+      sim_id
+    )
+}
+
+make_year_comp <- function(kind, fishery, nsim = 12L) {
+  if (kind == "lf") {
+    pred_list <- bet$report$lf_pred
+    fishery_f <- bet$data$lf_fishery_f
+    n_eff_rows <- split(bet$data$lf_n, bet$data$lf_fishery)[[as.character(fishery)]]
+    obs_matrix <- bet$data$lf_obs_in[bet$data$lf_fishery == fishery, , drop = FALSE]
+    bins <- bet$data$len_mid
+    obs <- bet$data$wcpo_bet_lf %>% filter(fishery == !!fishery)
+    bin_col <- "length"
+  } else {
+    pred_list <- bet$report$wf_pred
+    fishery_f <- bet$data$wf_fishery_f
+    n_eff_rows <- split(bet$data$wf_n, bet$data$wf_fishery)[[as.character(fishery)]]
+    obs_matrix <- bet$data$wf_obs_in[bet$data$wf_fishery == fishery, , drop = FALSE]
+    bins <- bet$data$wt_mid
+    obs <- bet$data$wcpo_bet_wf %>% filter(fishery == !!fishery)
+    bin_col <- "weight"
+  }
+
+  i <- which(fishery_f == fishery)
+  pred <- as.matrix(pred_list[[i]])
+  obs_rows <- obs %>%
+    distinct(year, month, ts) %>%
+    arrange(ts, year, month)
+  if (nrow(obs_rows) != nrow(pred)) {
+    stop("Observed rows do not align with predicted composition rows")
+  }
+  if (length(n_eff_rows) != nrow(pred)) {
+    stop("Effective N rows do not align with predicted composition rows")
+  }
+  obs_rows <- obs_rows %>%
+    mutate(effective_n = as.numeric(n_eff_rows))
+
+  pred_year <- bet_weighted_comp_summary(
+    pred,
+    bins,
+    obs_rows$effective_n,
+    obs_rows$year
+  ) %>%
+    transmute(
+      year = .group,
+      !!bin_col := bin,
+      proportion
+    )
+
+  obs_year <- bet_weighted_comp_summary(
+    as.matrix(obs_matrix),
+    bins,
+    obs_rows$effective_n,
+    obs_rows$year
+  ) %>%
+    transmute(
+      year = .group,
+      !!bin_col := bin,
+      proportion
+    )
+
+  effective_n <- obs_rows %>%
+    group_by(year) %>%
+    summarise(effective_n = sum(effective_n, na.rm = TRUE), .groups = "drop") %>%
+    mutate(label = sprintf("Neff = %.1f", effective_n))
+
+  list(
+    observed = obs_year,
+    predicted = pred_year,
+    simulated = simulate_year_composition(
+      pred,
+      bins,
+      obs_rows$effective_n,
+      obs_rows$year,
+      bin_col,
+      nsim = nsim
+    ),
+    effective_n = effective_n,
+    bin_col = bin_col
+  )
+}
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-lf12-year-composition
+#| fig-cap: "Year-specific observed, predicted, and simulated length-composition proportions for selected years of WCPO bigeye tuna fishery 12. Unlike the pooled length-composition diagnostics in @fig-bet-lf-diagnostics, this plot does not aggregate over all years; each panel has its own fitted and simulated composition. Panel text gives the variance-adjusted effective N used by the likelihood for that year."
+#| fig-height: 7.2
+#| fig-width: 8
+
+set.seed(12012)
+bet_lf12_year <- make_year_comp("lf", 12, nsim = 12L)
+bet_lf12_panel_years <- select_panel_years(bet_lf12_year$predicted$year, 16L)
+
+ggplot() +
+  geom_col(data = filter(bet_lf12_year$observed, year %in% bet_lf12_panel_years),
+           aes(x = length, y = proportion), fill = opal_role["observed"], width = 1.8) +
+  geom_line(data = filter(bet_lf12_year$simulated, year %in% bet_lf12_panel_years),
+            aes(x = length, y = proportion, group = sim_id),
+            colour = opal_role["simulated"], alpha = 0.6, linewidth = 0.3) +
+  geom_line(data = filter(bet_lf12_year$predicted, year %in% bet_lf12_panel_years),
+            aes(x = length, y = proportion), colour = opal_role["fitted"], linewidth = 0.5) +
+  geom_text(data = filter(bet_lf12_year$effective_n, year %in% bet_lf12_panel_years),
+            aes(x = Inf, y = Inf, label = label),
+            inherit.aes = FALSE, hjust = 1.05, vjust = 1.3,
+            size = 2.1, colour = "grey25") +
+  facet_wrap(~ year, ncol = 4, scales = "free_y") +
+  labs(x = "Length (cm)", y = "Proportion") +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  theme_opal() +
+  theme(strip.text = element_text(size = 7),
+        axis.text = element_text(size = 6))
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-wf15-year-composition
+#| fig-cap: "Year-specific observed, predicted, and simulated weight-composition proportions for selected years of WCPO bigeye tuna fishery 15. Unlike the pooled weight-composition diagnostics in @fig-bet-wf-diagnostics, this plot does not aggregate over all years; each panel has its own fitted and simulated composition. Panel text gives the variance-adjusted effective N used by the likelihood for that year."
+#| fig-height: 7.2
+#| fig-width: 8
+
+set.seed(15015)
+bet_wf15_year <- make_year_comp("wf", 15, nsim = 12L)
+bet_wf15_panel_years <- select_panel_years(bet_wf15_year$predicted$year, 20L)
+
+ggplot() +
+  geom_col(data = filter(bet_wf15_year$observed, year %in% bet_wf15_panel_years),
+           aes(x = weight, y = proportion), fill = opal_role["observed"], width = 1.8) +
+  geom_line(data = filter(bet_wf15_year$simulated, year %in% bet_wf15_panel_years),
+            aes(x = weight, y = proportion, group = sim_id),
+            colour = opal_role["simulated"], alpha = 0.6, linewidth = 0.28) +
+  geom_line(data = filter(bet_wf15_year$predicted, year %in% bet_wf15_panel_years),
+            aes(x = weight, y = proportion), colour = opal_role["fitted"], linewidth = 0.5) +
+  geom_text(data = filter(bet_wf15_year$effective_n, year %in% bet_wf15_panel_years),
+            aes(x = Inf, y = Inf, label = label),
+            inherit.aes = FALSE, hjust = 1.05, vjust = 1.3,
+            size = 2.1, colour = "grey25") +
+  facet_wrap(~ year, ncol = 4, scales = "free_y") +
+  labs(x = "Weight (kg)", y = "Proportion") +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  theme_opal() +
+  theme(strip.text = element_text(size = 7),
+        axis.text = element_text(size = 6))
+```
+
+```{r}
+#| echo: false
+#| include: false
+#| label: prep-bet-composition-residuals
+
+bet_lf_residuals <- bet$diagnostics$lf_residuals %>%
+  filter(is.finite(residual)) %>%
+  transmute(
+    type,
+    Fishery,
+    year,
+    bin,
+    residual,
+    sign
+  )
+
+bet_wf_residuals <- bet$diagnostics$wf_residuals %>%
+  filter(is.finite(residual)) %>%
+  transmute(
+    type,
+    Fishery,
+    year,
+    bin,
+    residual,
+    sign
+  )
+
+bet_comp_residuals <- bind_rows(bet_lf_residuals, bet_wf_residuals) %>%
+  mutate(
+    type = factor(type, levels = c("Length composition", "Weight composition")),
+    Fishery = factor(Fishery, levels = paste("Fishery", sort(unique(as.integer(sub("Fishery ", "", Fishery))))))
+  )
+
+plot_bet_comp_residuals <- function(plot_data, y_label) {
+  plot_summary <- plot_data %>%
+    group_by(Fishery, year, bin) %>%
+    summarise(residual = mean(residual, na.rm = TRUE), .groups = "drop") %>%
+    mutate(residual = pmax(pmin(residual, 4), -4))
+
+  ggplot(plot_summary, aes(x = year, y = bin, fill = residual)) +
+    geom_raster(interpolate = FALSE) +
+    facet_wrap(~ Fishery, ncol = 2, scales = "free_y") +
+    scale_fill_opal_resid() +
+    labs(x = "Year", y = y_label) +
+    theme_opal()
+}
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-lf-composition-residuals
+#| fig-cap: "Length-composition OSA residual diagnostics for fishery 12 in the fitted WCPO bigeye tuna diagnostic model. Colours show the mean OSA residual in each year-length cell, with blue indicating negative residuals and red indicating positive residuals."
+#| fig-height: 4.8
+#| fig-width: 8
+
+plot_bet_comp_residuals(
+  filter(bet_comp_residuals, type == "Length composition", Fishery == "Fishery 12"),
+  y_label = "Length (cm)"
+)
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-wf-composition-residuals
+#| fig-cap: "Weight-composition OSA residual diagnostics for fishery 15 in the fitted WCPO bigeye tuna diagnostic model. Colours show the mean OSA residual in each year-weight cell, with blue indicating negative residuals and red indicating positive residuals."
+#| fig-height: 4.8
+#| fig-width: 8
+
+plot_bet_comp_residuals(
+  filter(bet_comp_residuals, type == "Weight composition", Fishery == "Fishery 15"),
+  y_label = "Weight (kg)"
+)
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-composition-residual-qq
+#| fig-cap: "Normal Q-Q diagnostics for length- and weight-composition OSA residuals in the fitted WCPO bigeye tuna diagnostic model, shown separately by composition type and fishery. The grey line is the fixed standard-normal one-to-one reference; it is not fitted separately within panels."
+#| fig-height: 8
+#| fig-width: 8
+
+bet_comp_qq <- bet_comp_residuals %>%
+  mutate(
+    fishery_number = as.integer(sub("Fishery ", "", as.character(Fishery))),
+    sdnr = ave(residual, type, Fishery, FUN = sd),
+    panel = sprintf("%s\n%s\nSDNR = %.2f", type, Fishery, sdnr)
+  ) %>%
+  group_by(type, Fishery) %>%
+  arrange(residual, .by_group = TRUE) %>%
+  mutate(theoretical = qnorm(ppoints(n()))) %>%
+  ungroup() %>%
+  arrange(type, fishery_number) %>%
+  mutate(panel = factor(panel, levels = unique(panel)))
+
+bet_comp_qq_limit <- max(abs(c(bet_comp_qq$theoretical, bet_comp_qq$residual)), na.rm = TRUE)
+bet_comp_qq_limit <- ceiling(min(max(bet_comp_qq_limit, 4), 5.5) * 2) / 2
+
+ggplot(bet_comp_qq, aes(x = theoretical, y = residual)) +
+  geom_abline(intercept = 0, slope = 1, colour = opal_cols["struct"],
+              linetype = "dashed", linewidth = 0.35) +
+  geom_point(size = 0.28, alpha = 0.25) +
+  facet_wrap(~ panel, ncol = 4) +
+  coord_equal(xlim = c(-bet_comp_qq_limit, bet_comp_qq_limit),
+              ylim = c(-bet_comp_qq_limit, bet_comp_qq_limit)) +
+  labs(x = "Theoretical quantiles", y = "Sample quantiles") +
+  theme_opal() +
+  theme(strip.text = element_text(size = 6.5))
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-agg6-composition-residual-qq
+#| fig-cap: "Normal Q-Q diagnostics for grouped length- and weight-composition OSA residuals in the matched six-fishery WCPO bigeye tuna aggregation sensitivity. These panels repeat the layout of @fig-bet-composition-residual-qq using finite bin-level `compResidual::resMulti()` residuals from the grouped observed and predicted compositions; the grey line is the fixed standard-normal one-to-one reference."
+#| fig-height: 4.8
+#| fig-width: 8
+
+bet_agg6_comp_qq <- bet_agg6_comp_residual_rows %>%
+  filter(is.finite(residual)) %>%
+  mutate(
+    type = factor(type, levels = c("Length composition", "Weight composition")),
+    sdnr = ave(residual, type, group_label, FUN = sd),
+    panel = sprintf("%s\n%s\nSDNR = %.2f", type, group_label, sdnr)
+  ) %>%
+  group_by(type, group_label) %>%
+  arrange(residual, .by_group = TRUE) %>%
+  mutate(theoretical = qnorm(ppoints(n()))) %>%
+  ungroup() %>%
+  arrange(type, fishery_num) %>%
+  mutate(panel = factor(panel, levels = unique(panel)))
+
+bet_agg6_comp_qq_limit <- max(
+  abs(c(bet_agg6_comp_qq$theoretical, bet_agg6_comp_qq$residual)),
+  na.rm = TRUE
+)
+bet_agg6_comp_qq_limit <- ceiling(min(max(bet_agg6_comp_qq_limit, 4), 5.5) * 2) / 2
+
+ggplot(bet_agg6_comp_qq, aes(x = theoretical, y = residual)) +
+  geom_abline(intercept = 0, slope = 1, colour = opal_cols["struct"],
+              linetype = "dashed", linewidth = 0.35) +
+  geom_point(size = 0.28, alpha = 0.25) +
+  facet_wrap(~ panel, ncol = 3) +
+  coord_equal(xlim = c(-bet_agg6_comp_qq_limit, bet_agg6_comp_qq_limit),
+              ylim = c(-bet_agg6_comp_qq_limit, bet_agg6_comp_qq_limit)) +
+  labs(x = "Theoretical quantiles", y = "Sample quantiles") +
+  theme_opal() +
+  theme(strip.text = element_text(size = 6.5))
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-recruitment-deviations
+#| fig-cap: "Estimated recruitment deviations for the fitted WCPO bigeye tuna diagnostic model and matched six-fishery aggregation sensitivity, shown by seasonal index month."
+#| fig-height: 5
+#| fig-width: 8
+
+bet_rec_raw <- bet$diagnostics$recruitment_raw
+bet_rec_lookup <- bet_rec_raw$cpue_lookup %>%
+  arrange(ts)
+bet_rec_months <- sort(unique(bet_rec_lookup$month))
+bet_rec_season_lookup <- tibble(
+  month = bet_rec_months,
+  season = seq_along(bet_rec_months),
+  season_label = paste0(month.name[month])
+)
+bet_rec_df <- bet_rec_lookup %>%
+  left_join(bet_rec_season_lookup, by = "month") %>%
+  mutate(
+    rdev = bet_rec_raw$rdev_y,
+    estimated = if (length(bet_rec_raw$map_rdev) == length(bet_rec_raw$rdev_y)) {
+      !is.na(bet_rec_raw$map_rdev)
+    } else {
+      TRUE
+    },
+    model = "opal",
+    season_label = factor(season_label, levels = month.name[bet_rec_months])
+  )
+
+bet_agg6_rec_lookup <- bet_agg6_raw$result$fit$data$cpue_data %>%
+  distinct(ts, year, month) %>%
+  arrange(ts)
+bet_agg6_rec_df <- bet_agg6_rec_lookup %>%
+  left_join(bet_rec_season_lookup, by = "month") %>%
+  mutate(
+    rdev = as.numeric(bet_agg6_raw$result$par_list$rdev_y),
+    estimated = if (length(bet_agg6_raw$result$fit$map$rdev_y) == length(rdev)) {
+      !is.na(bet_agg6_raw$result$fit$map$rdev_y)
+    } else {
+      TRUE
+    },
+    model = "6-fishery opal",
+    season_label = factor(season_label, levels = month.name[bet_rec_months])
+  )
+
+bet_rec_plot_df <- bind_rows(bet_rec_df, bet_agg6_rec_df) %>%
+  mutate(model = factor(model, levels = c("opal", "6-fishery opal")))
+
+ggplot(bet_rec_plot_df, aes(x = year, y = rdev, colour = model)) +
+  geom_hline(yintercept = 0, linewidth = 0.3, colour = "grey40") +
+  geom_line(linewidth = 0.45) +
+  geom_point(size = 0.9, alpha = 0.75) +
+  facet_wrap(~ season_label, ncol = 2) +
+  scale_colour_opal(
+    breaks = c("opal", "6-fishery opal"),
+    labels = c("15-fishery opal", "6-fishery opal")
+  ) +
+  scale_x_continuous(breaks = scales::breaks_pretty(n = 6)) +
+  labs(x = "Year", y = "Recruitment deviation", colour = "Model") +
+  theme_opal()
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-selectivity-length
+#| fig-cap: "Selectivity-at-length curves for WCPO bigeye tuna fisheries. Teal lines show the fitted opal selectivity curves; dashed navy lines show the SS3 reference selectivity curves used to initialise the opal model; dotted coral lines show the MFCL reference selectivity curves."
+#| fig-height: 8
+#| fig-width: 8
+
+sel_logistic_plain <- function(len, par) {
+  mu <- mean(len)
+  sd_len <- sd(len)
+  a50 <- mu + par[1] * sd_len
+  w95 <- exp(par[2]) * sd_len
+  1 / (1 + exp(-log(19) * (len - a50) / w95))
+}
+
+sel_double_normal_plain <- function(len, par) {
+  mu <- mean(len)
+  sd_len <- sd(len)
+  peak <- mu + par[1] * sd_len
+  upselex <- exp(par[3]) * sd_len^2
+  downselex <- exp(par[4]) * sd_len^2
+  point1 <- 1 / (1 + exp(-par[5]))
+  point2 <- 1 / (1 + exp(-par[6]))
+  j2 <- length(len)
+  bin_width <- len[2] - len[1]
+  peak2 <- peak + bin_width + (0.99 * len[j2] - peak - bin_width) /
+    (1 + exp(-par[2]))
+  t1min <- exp(-(len[1] - peak)^2 / upselex)
+  t2min <- exp(-(len[j2] - peak2)^2 / downselex)
+  t1 <- len - peak
+  t2 <- len - peak2
+  join1 <- 1 / (1 + exp(-(20 / (1 + abs(t1))) * t1))
+  join2 <- 1 / (1 + exp(-(20 / (1 + abs(t2))) * t2))
+  asc <- point1 + (1 - point1) * (exp(-t1^2 / upselex) - t1min) / (1 - t1min)
+  dsc <- 1 + (point2 - 1) * (exp(-t2^2 / downselex) - 1) / (t2min - 1)
+  asc * (1 - join1) + join1 * (1 - join2 + dsc * join2)
+}
+
+bet_selectivity_curve <- function(par_sel, series) {
+  map_dfr(seq_len(nrow(par_sel)), function(f) {
+    sel <- if (bet_sel_raw$sel_type_f[f] == 1L) {
+      sel_logistic_plain(bet_sel_raw$len_mid, par_sel[f, ])
+    } else {
+      sel_double_normal_plain(bet_sel_raw$len_mid, par_sel[f, ])
+    }
+    tibble(
+      Fishery = paste("Fishery", f),
+      length = bet_sel_raw$len_mid,
+      selectivity = as.numeric(sel),
+      series = series
+    )
+  })
+}
+
+# MFCL reference selectivity — already realized at-length, not parametric,
+# so reshape rather than evaluate through a selectivity function
+wcpo_bet_xmodel_selex <- readRDS(file.path("cached", "bet", "wcpo_bet_xmodel_selex.rds"))
+
+n_fishery <- nrow(bet_sel_raw$par_est)
+
+# simpler/cleaner version of the above filter — keep fisheries that exist
+# in the opal comparison
+mfcl_selectivity_df <- wcpo_bet_xmodel_selex %>%
+  filter(Sex == 0, Yr == max(Yr), Fleet <= n_fishery) %>%
+  transmute(
+    Fishery = paste("Fishery", Fleet),
+    length = variable,
+    selectivity = value,
+    series = "MFCL"
+  )
+
+bet_selectivity_df <- bind_rows(
+  bet_selectivity_curve(bet_sel_raw$par_est, "opal"),
+  bet_selectivity_curve(bet_sel_raw$par_ref, "SS3"),
+  mfcl_selectivity_df
+) %>%
+  mutate(
+    Fishery = factor(Fishery, levels = paste("Fishery", seq_len(n_fishery))),
+    series = factor(series, levels = c("SS3", "MFCL", "opal"))
+  )
+
+ggplot(bet_selectivity_df, aes(x = length, y = selectivity)) +
+  geom_line(data = filter(bet_selectivity_df, series == "SS3"),
+            colour = opal_models["SS3"], linetype = "dashed", linewidth = 0.55) +
+  geom_line(data = filter(bet_selectivity_df, series == "MFCL"),
+            colour = opal_models["MFCL"], linetype = "dotted", linewidth = 0.55) +
+  geom_line(data = filter(bet_selectivity_df, series == "opal"),
+            colour = opal_models["opal"], linewidth = 0.7) +
+  facet_wrap(~ Fishery, ncol = 3) +
+  labs(x = "Length (cm)", y = "Selectivity") +
+  coord_cartesian(ylim = c(0, 1)) +
+  theme_opal()
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-agg6-selectivity
+#| fig-cap: "Estimated selectivity-at-length curves for the six-fishery WCPO bigeye tuna aggregation sensitivity. Facet labels identify the original BET fisheries pooled into each aggregation group."
+#| fig-height: 4.6
+#| fig-width: 8
+
+bet_agg6_selectivity_plot <- bet_agg6$selectivity %>%
+  left_join(bet_agg6_group_labels, by = "fishery") %>%
+  mutate(group_label = factor(group_label, levels = bet_agg6_group_labels$group_label))
+
+ggplot(bet_agg6_selectivity_plot, aes(x = length, y = selectivity)) +
+  geom_line(colour = opal_models["6-fishery opal"], linewidth = 0.85) +
+  facet_wrap(~ group_label, ncol = 3) +
+  coord_cartesian(ylim = c(0, 1)) +
+  labs(x = "Length (cm)", y = "Selectivity") +
+  theme_opal(base_size = 9) +
+  theme(strip.text = element_text(size = 7))
+```
+
+```{r}
+#| echo: false
+#| label: fig-bet-biomass
+#| fig-cap: "Estimated spawning biomass and relative biomass trajectories for the fitted WCPO bigeye tuna diagnostic model and the matched six-fishery aggregation sensitivity. Shaded ribbons show approximate 95% intervals from model-based standard errors; the retained `opal` ribbon uses `RTMB::sdreport()` with a supplied positive-definite fixed-effect Hessian. The `opal` models are compared with the SS3 and MFCL reference models; external-model SB/SB0 uses the same median SSB/depletion reference scale reported in the text."
+#| fig-height: 5
+#| fig-width: 8
+
+bet_biomass_unc <- bet$diagnostics$biomass_uncertainty
+if (is.null(bet_biomass_unc)) {
+  stop("BET biomass uncertainty is not available in the cached results")
+}
+bet_biomass <- bind_rows(
+  bet_biomass_unc %>%
+    transmute(
+      year,
+      quantity = "Spawning~biomass~(mt)",
+      value = spawning_biomass,
+      lower = if_else(is.finite(spawning_biomass_se),
+                      pmax(0, spawning_biomass - 1.96 * spawning_biomass_se),
+                      NA_real_),
+      upper = if_else(is.finite(spawning_biomass_se),
+                      spawning_biomass + 1.96 * spawning_biomass_se,
+                      NA_real_)
+    ),
+  bet_biomass_unc %>%
+    transmute(
+      year,
+      quantity = "SB[t]/SB[0]",
+      value = sb_sb0,
+      lower = if_else(is.finite(sb_sb0_se),
+                      pmax(0, sb_sb0 - 1.96 * sb_sb0_se),
+                      NA_real_),
+      upper = if_else(is.finite(sb_sb0_se),
+                      sb_sb0 + 1.96 * sb_sb0_se,
+                      NA_real_)
+    ),
+  bet_biomass_unc %>%
+    transmute(
+      year,
+      quantity = "SB[t]/SB[list(t,F==0)]",
+      value = dynamic_depletion,
+      lower = if_else(is.finite(dynamic_depletion_se),
+                      pmax(0, dynamic_depletion - 1.96 * dynamic_depletion_se),
+                      NA_real_),
+      upper = if_else(is.finite(dynamic_depletion_se),
+                      dynamic_depletion + 1.96 * dynamic_depletion_se,
+                      NA_real_)
+    )
+) %>%
+  mutate(
+    quantity = factor(
+      quantity,
+      levels = c("Spawning~biomass~(mt)", "SB[t]/SB[0]", "SB[t]/SB[list(t,F==0)]")
+    )
+  )
+
+bet_biomass$model = "opal"
+bet_agg6_biomass <- bind_rows(
+  bet_agg6$biomass %>%
+    transmute(year, quantity = "Spawning~biomass~(mt)",
+              value = spawning_biomass, lower = NA_real_, upper = NA_real_,
+              model = "6-fishery opal"),
+  bet_agg6$biomass %>%
+    transmute(year, quantity = "SB[t]/SB[0]",
+              value = sb_sb0, lower = NA_real_, upper = NA_real_,
+              model = "6-fishery opal"),
+  bet_agg6$biomass %>%
+    transmute(year, quantity = "SB[t]/SB[list(t,F==0)]",
+              value = dynamic_depletion, lower = NA_real_, upper = NA_real_,
+              model = "6-fishery opal")
+) %>%
+  mutate(quantity = factor(quantity, levels = levels(bet_biomass$quantity)))
+
+# load ss3 and mfcl trajectories for comparison
+bet_xmodel <- readRDS(file.path("cached", "bet", "wcpo_bet_xmodel_biomass.rds"))
+
+xmodel_b0_for_plot <- bet_xmodel_b0 %>%
+  filter(model %in% c("MFCL-v11", "02-fix-sel")) %>%
+  mutate(model = recode(model, "MFCL-v11" = "MFCL", "02-fix-sel" = "SS3")) %>%
+  select(model, B0)
+if (nrow(xmodel_b0_for_plot) != 2L || any(!is.finite(xmodel_b0_for_plot$B0))) {
+  stop("External-model B0 scale is unavailable for the BET biomass comparison")
+}
+
+xmodel_long <- bet_xmodel %>%
+  filter(model %in% c("MFCL-v11", "02-fix-sel")) %>%
+  mutate(model = recode(model, "MFCL-v11" = "MFCL", "02-fix-sel" = "SS3")) %>%
+  arrange(model, ts) %>%
+  left_join(xmodel_b0_for_plot, by = "model") %>%
+  mutate(static_depletion = ssb / B0,
+         static_depletion_se = ssb_se / B0) %>%
+  pivot_longer(
+    cols = c(ssb, depletion, static_depletion),
+    names_to = "quantity_id",
+    values_to = "value"
+  ) %>%
+  mutate(
+    se = case_when(
+      quantity_id == "ssb"               ~ ssb_se,
+      quantity_id == "depletion"         ~ depletion_se,
+      quantity_id == "static_depletion"  ~ static_depletion_se
+    ),
+    quantity = case_when(
+      quantity_id == "ssb"               ~ "Spawning~biomass~(mt)",
+      quantity_id == "static_depletion"  ~ "SB[t]/SB[0]",
+      quantity_id == "depletion"         ~ "SB[t]/SB[list(t,F==0)]"
+    ),
+    # MFCL is annual -> use year as-is; SS3 is quarterly -> add season fraction
+    year = if_else(model == "MFCL", year, year + (season - 1) / 4),
+    lower = pmax(0, value - 1.96 * se),
+    upper = value + 1.96 * se,
+    quantity = factor(quantity, levels = levels(bet_biomass$quantity))
+  ) %>%
+  select(year, quantity, value, lower, upper, model)
+
+bet_combined <- bind_rows(bet_biomass, bet_agg6_biomass, xmodel_long) %>%
+  filter(year <= 2018)
+
+ggplot(bet_combined, aes(x = year, y = value, colour = model, fill = model)) +
+  geom_ribbon(data = filter(bet_combined, is.finite(lower), is.finite(upper)),
+              aes(ymin = lower, ymax = upper),
+              alpha = 0.18, colour = NA) +
+  geom_line(linewidth = 0.9) +
+  facet_wrap(~ quantity, nrow = 1, scales = "free_y", labeller = label_parsed) +
+  scale_colour_opal(breaks = c("opal", "6-fishery opal", "SS3", "MFCL")) +
+  scale_fill_opal(breaks = c("opal", "6-fishery opal", "SS3", "MFCL")) +
+  labs(x = "Year", y = NULL, colour = "Model", fill = "Model") +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  theme_opal() +
+  guides(fill = "none")
+```

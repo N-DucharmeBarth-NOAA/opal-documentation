@@ -1,0 +1,182 @@
+/* Simplified Hero Section Styling - No Fish Illustration */
+.site-hero {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 2rem;
+  padding: 2rem 0;
+  min-height: 60vh;
+}
+
+.site-intro {
+  flex: 2;
+  min-width: 0;
+}
+
+.site-title {
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  max-width: 800px;
+  display: block;
+  color: var(--blue-20);
+  font-weight: 300;
+  line-height: 1.2;
+}
+
+.site-subtitle {
+  font-size: clamp(1.2rem, 3vw, 1.8rem);
+  max-width: 800px;
+  display: block;
+  color: var(--blue-40);
+  font-style: italic;
+  margin-bottom: 1.5rem;
+}
+
+.species-info {
+  margin: 1rem 0;
+}
+
+.social-icon-links {
+  display: flex;
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.social-icon-links .link-primary {
+  color: var(--blue-50);
+  text-decoration: none;
+  transition: all 0.3s ease;
+}
+
+.social-icon-links .link-primary:hover,
+.social-icon-links .link-primary:focus {
+  color: var(--orange-50);
+  transform: scale(1.1);
+}
+
+.site-logo {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-width: 400px;
+}
+
+.logo-container {
+  position: relative;
+  width: 300px;
+  height: 300px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.noaa-logo {
+  width: 100%;
+  max-width: 280px;
+  height: auto;
+  object-fit: contain;
+  opacity: 0.9;
+  transition: opacity 0.3s ease;
+}
+
+.noaa-logo:hover {
+  opacity: 1;
+}
+
+.cta-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.cta-buttons .btn {
+  padding: 0.75rem 1.5rem;
+  font-weight: 500;
+  text-decoration: none;
+  border-radius: 0.5rem;
+  transition: all 0.3s ease;
+}
+
+.cta-buttons .btn-primary {
+  background-color: var(--blue-50);
+  border-color: var(--blue-50);
+  color: white;
+}
+
+.cta-buttons .btn-primary:hover {
+  background-color: var(--blue-40);
+  border-color: var(--blue-40);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 133, 202, 0.3);
+}
+
+.cta-buttons .btn-outline-secondary {
+  color: var(--blue-40);
+  border-color: var(--blue-40);
+  background: transparent;
+}
+
+.cta-buttons .btn-outline-secondary:hover {
+  background-color: var(--blue-40);
+  border-color: var(--blue-40);
+  color: white;
+  transform: translateY(-2px);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .site-hero {
+    flex-direction: column;
+    text-align: center;
+    min-height: auto;
+    padding: 1rem 0;
+  }
+  
+  .site-intro {
+    order: 2;
+  }
+  
+  .site-logo {
+    order: 1;
+    max-width: 200px;
+    margin-bottom: 1rem;
+  }
+  
+  .logo-container {
+    width: 200px;
+    height: 200px;
+  }
+  
+  .cta-buttons {
+    justify-content: center;
+  }
+  
+  .cta-buttons .btn {
+    min-width: 150px;
+  }
+}
+
+@media (max-width: 576px) {
+  .site-hero {
+    gap: 1rem;
+  }
+  
+  .logo-container {
+    width: 150px;
+    height: 150px;
+  }
+  
+  .social-icon-links {
+    justify-content: center;
+  }
+}
+
+.hero-image img {
+      width: 50%; /* Set your desired fixed width */
+      height: auto; /* Set your desired fixed height */
+      /* You might still want max-width: 100% to prevent overflow on smaller screens */
+      max-width: 100%;
+      height: auto; /* Use height: auto when using max-width to maintain aspect ratio */
+    }

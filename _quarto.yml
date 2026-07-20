@@ -1,0 +1,98 @@
+project:
+  type: website
+  title: "opal — the open population assessment library"
+  output-dir: "_output"
+  resources:
+    - "assets/"
+
+website:
+  title: "opal"
+  # TODO: confirm the deployment URL for this documentation site.
+  site-url: https://n-ducharmebarth-noaa.github.io/opal-documentation/
+  # TODO: confirm the repo that *hosts this site* (docs repo, not the package repo).
+  repo-url: https://github.com/N-DucharmeBarth-NOAA/opal-documentation
+  repo-actions: [source, edit, issue]
+
+  navbar:
+    title: "opal"
+    # TODO: drop the opal hex logo in as assets/images/opal-hex.png
+    logo: "assets/static/opal-HEX-transparent.png"
+    logo-alt: "opal hex logo"
+    background: light
+    right:
+      - text: "Home"
+        href: index.qmd
+      - text: "SC22 paper"
+        href: assets/opal-sc22-wp.html
+      - text: "Package docs"
+        href: https://n-ducharmebarth-noaa.github.io/opal/
+      - icon: github
+        href: https://github.com/N-DucharmeBarth-NOAA/opal
+
+  page-footer:
+    border: false
+    background: light
+    left: >-
+      <span id="copyright-year"></span> opal &middot; developed under WCPFC Project 123 by the opal development team
+    right: >-
+      <a class="link-dark" href="https://github.com/N-DucharmeBarth-NOAA/opal" title="github" target="_blank" rel="noopener"><i class="bi bi-github"></i></a>
+
+format:
+  html:
+    body-width: 100%
+    anchor-sections: true
+    include-after-body: assets/customizations/open-in-new-tab.html
+    header-includes: |
+      <script>
+        window.addEventListener('DOMContentLoaded', function() {
+          var year = new Date().getFullYear();
+          var el = document.getElementById('copyright-year');
+          if (el) el.textContent = '© ' + year;
+        });
+      </script>
+    include-in-header:
+      - text: |
+          <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    theme:
+      - default
+      - assets/customizations/opal-colors.scss
+      - assets/customizations/opal-light.scss
+      - assets/customizations/base-styles.scss
+    css:
+      - assets/customizations/styles.css
+      - assets/customizations/components.css
+    toc: true
+    toc-location: left
+    code-overflow: wrap
+    title-block-banner: true
+    fig-dpi: 300
+    fig-width: 8
+    fig-height: 4.5
+    embed-resources: true
+
+execute:
+  eval: true
+  echo: false
+  output: true
+  warning: true
+  message: true
+
+# Global figure settings
+fig-dpi: 300
+fig-width: 8
+fig-height: 4.5
+
+# Profiles for different deployment environments
+profiles:
+  development:
+    execute:
+      eval: true
+      echo: true
+      output: true
+    format:
+      html:
+        embed-resources: false
+
+metadata:
+  date-format: "iso"
+  published-title: "Last updated"

@@ -1,0 +1,90 @@
+---
+pagetitle: "opal — the open population assessment library"
+page-layout: full
+title-block-banner: false
+format:
+  html:
+    toc: true
+
+listing:
+  - id: resource-listing
+    type: grid
+    max-items: 8
+    page-size: 6
+    categories: false
+    sort-ui: false
+    filter-ui: false
+    fields: [title, description]
+    contents:
+        # TODO: point these at the rendered case-study / paper HTML once they are
+        # copied into assets/ (or convert them to in-project .qmd pages).
+        - path: assets/opal-sc22-wp.html
+          title: "SC22 working paper"
+          description: >
+            WCPFC Scientific Committee working paper describing opal's architecture and the two case studies.
+          display-order: 1
+    sort: "display-order"
+
+header-includes: >
+  <link rel="stylesheet" href="assets/customizations/hero.css">
+resources:
+  - assets/customizations/hero.css
+  - assets/images/
+---
+
+```{=html}
+<div class="site-hero mb-5">
+  <div class="site-intro">
+    <h1 class="site-title text-primary mt-0 fw-lighter text-center text-sm-start">
+      opal
+    </h1>
+
+    <div class="species-info">
+      <h2 class="site-subtitle text-secondary mt-0 fw-lighter text-center text-sm-start">
+        the open population assessment library
+      </h2>
+    </div>
+
+    <p class="site-intro fs-5">
+      <strong>opal</strong> is an open-source, modular R package for fisheries stock assessment,
+      built on <a href="https://github.com/kaskr/RTMB">RTMB</a> for automatic differentiation and
+      gradient-based optimization. It is developed under
+      <strong>WCPFC <a href="https://www.wcpfc.int/">Project 123</a></strong>: scoping the next
+      generation of tuna stock assessment software.
+    </p>
+
+    <div class="cta-buttons">
+      <a class="btn btn-primary" href="https://n-ducharmebarth-noaa.github.io/opal/">Documentation</a>
+      <a class="btn btn-outline-secondary" href="https://github.com/N-DucharmeBarth-NOAA/opal">View on GitHub</a>
+    </div>
+  </div>
+
+  <div class="site-logo">
+    <div class="logo-container">
+      <!-- TODO: add assets/images/opal-hex.png -->
+      <img src="assets/static/opal-HEX-transparent.png" alt="opal hex logo" class="noaa-logo">
+    </div>
+  </div>
+</div>
+```
+
+::: {.callout-note}
+## Development status
+opal is under active development (proof of concept, version 0.0.3). The case studies presented here are illustrative and are **not** intended to inform management advice.
+:::
+
+## Quick links {#resources}
+
+::: {#resource-listing}
+:::
+
+## External resources
+
+- [opal package documentation](https://n-ducharmebarth-noaa.github.io/opal/)
+- [opal on GitHub](https://github.com/N-DucharmeBarth-NOAA/opal)
+- [RTMB](https://github.com/kaskr/RTMB) --- the automatic-differentiation engine opal is built on
+- [WCPFC](https://www.wcpfc.int/) --- Western and Central Pacific Fisheries Commission
+
+## Contact
+
+For questions about opal, open an issue <https://github.com/N-DucharmeBarth-NOAA/opal/issues>.

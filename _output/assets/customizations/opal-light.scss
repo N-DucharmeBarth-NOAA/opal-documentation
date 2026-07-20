@@ -1,0 +1,231 @@
+/*-- scss:defaults --*/
+// opal Light Theme
+// Adapted from noaa-light.scss. Differences from the NOAA original:
+//   * imports opal-colors instead of noaa-colors
+//   * $link-color and .btn-primary use the darker teal ($blue-40) rather than
+//     brand teal ($blue-50), because brand teal #27A7BE fails WCAG contrast for
+//     body-size links and white-on-fill button text. Brand teal is reserved for
+//     larger fills, borders, and the logo.
+
+@import "opal-colors";
+
+// Bootstrap color overrides for light theme
+$white:    #ffffff;
+$gray-100: $gray-100;
+$gray-200: $gray-90;
+$gray-300: $gray-80;
+$gray-400: $gray-70;
+$gray-500: $gray-60;
+$gray-600: $gray-50;
+$gray-700: $gray-40;
+$gray-800: $gray-30;
+$gray-900: $gray-20;
+$black:    $gray-10;
+
+$blue:    $blue-40;
+$indigo:  $accent-40;
+$purple:  #6f42c1;
+$pink:    #d63384;
+$red:     #dc3545;
+$orange:  $orange-50;
+$yellow:  $orange-70;
+$green:   #2f8f6b;
+$teal:    $blue-50;
+$cyan:    $blue-60;
+
+$primary:       $blue-40;
+$secondary:     $blue-70;
+$success:       $green;
+$info:          $blue-50;
+$warning:       $orange-60;
+$danger:        $red;
+$light:         $gray-100;
+$dark:          $gray-800;
+
+// Theme-specific variables
+$body-bg: white;
+$body-color: $noaa-whale-gray;
+$link-color: $blue-40;                 // AA-safe teal (brand teal reserved for fills/logo)
+$headings-color: $noaa-midnight-sky;   // deep teal
+
+// Navigation
+$navbar-bg: $white;
+$navbar-light-color: $gray-700;
+$navbar-light-hover-color: $blue-40;
+$navbar-light-active-color: $blue-30;
+
+// Components
+$code-color: $blue-30;
+$code-bg: $gray-100;
+$footer-bg: $gray-100;
+$border-color: $gray-300;
+
+// Cards and panels
+$card-bg: $white;
+$card-border-color: $gray-300;
+$card-cap-bg: $gray-100;
+
+// Alerts
+$alert-info-bg: $blue-90;
+$alert-info-border: $blue-70;
+$alert-info-color: $blue-20;
+
+$alert-warning-bg: $orange-90;
+$alert-warning-border: $orange-70;
+$alert-warning-color: $orange-20;
+
+$alert-success-bg: #d4edda;
+$alert-success-border: #c3e6cb;
+$alert-success-color: #155724;
+
+$alert-danger-bg: #f8d7da;
+$alert-danger-border: #f5c6cb;
+$alert-danger-color: #721c24;
+
+/*-- scss:rules --*/
+
+// Title banner customization
+.quarto-title-banner {
+  background: white;
+  border-bottom: 3px solid $blue-50;
+  color: $noaa-midnight-sky;
+}
+
+.quarto-title-banner .quarto-title .title {
+  font-weight: 300;
+  color: $noaa-midnight-sky;
+}
+
+// Navigation enhancements
+#quarto-header .navbar .nav-link .menu-text::after {
+  height: 0.15rem;
+  width: 0%;
+  display: inline-block;
+  content: "";
+  position: absolute;
+  bottom: -10px;
+  left: 0px;
+  transition: width 200ms ease-in-out;
+}
+
+#quarto-header .navbar .nav-link.active .menu-text::after,
+#quarto-header .navbar .nav-link:hover .menu-text::after {
+  background-color: $orange-50;
+  width: 100%;
+}
+
+// Sidebar styling
+.sidebar {
+  background-color: $white;
+  border-right: 1px solid $gray-300;
+}
+
+.sidebar-item {
+  border-bottom: 1px solid $gray-200;
+}
+
+.sidebar-item .sidebar-item-text {
+  color: $gray-700;
+}
+
+.sidebar-item.active .sidebar-item-text {
+  color: $blue-30;
+  font-weight: 500;
+}
+
+// Button enhancements
+.btn-primary {
+  background-color: $blue-40;   // darker teal for white-text contrast
+  border-color: $blue-40;
+
+  &:hover, &:focus {
+    background-color: $blue-30;
+    border-color: $blue-30;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(39, 167, 190, 0.35);
+  }
+}
+
+.btn-outline-secondary {
+  color: $blue-40;
+  border-color: $blue-40;
+
+  &:hover, &:focus {
+    background-color: $blue-40;
+    border-color: $blue-40;
+    color: white;
+  }
+}
+
+// Hero call-to-action button (defined in hero.css, re-pointed here for contrast)
+.cta-buttons .btn-primary {
+  background-color: $blue-40;
+  border-color: $blue-40;
+
+  &:hover, &:focus {
+    background-color: $blue-30;
+    border-color: $blue-30;
+  }
+}
+
+// Table styling
+.table {
+  border-color: $gray-300;
+}
+
+.table th {
+  background-color: $blue-90;
+  color: $blue-20;
+  border-bottom: 2px solid $blue-50;
+}
+
+.table-striped > tbody > tr:nth-of-type(odd) > td {
+  background-color: $gray-100;
+}
+
+// Code blocks
+.sourceCode {
+  background-color: $gray-100;
+  border: 1px solid $gray-300;
+}
+
+pre code {
+  background-color: transparent;
+}
+
+// Callouts
+.callout.callout-note {
+  border-left: 5px solid $blue-50;
+  background-color: $blue-95;
+}
+
+.callout.callout-important {
+  border-left: 5px solid $orange-50;
+  background-color: $orange-95;
+}
+
+.callout.callout-warning {
+  border-left: 5px solid $orange-60;
+  background-color: $orange-90;
+}
+
+.callout.callout-tip {
+  border-left: 5px solid $success;
+  background-color: #d4edda;
+}
+
+// Footer styling
+.nav-footer {
+  background-color: $gray-100;
+  border-top: 1px solid $gray-300;
+  color: $gray-600;
+}
+
+.nav-footer a {
+  color: $blue-40;
+  text-decoration: none;
+}
+
+.nav-footer a:hover {
+  color: $orange-50;
+}
