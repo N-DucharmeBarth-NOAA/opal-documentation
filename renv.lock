@@ -1616,38 +1616,6 @@
       "Maintainer": "Achim Zeileis <Achim.Zeileis@R-project.org>",
       "Repository": "CRAN"
     },
-    "compResidual": {
-      "Package": "compResidual",
-      "Version": "0.0.1",
-      "Source": "GitHub",
-      "Title": "Residual calculation for compositional observations",
-      "Date": "2022-01-13",
-      "Authors@R": "c(person(\"Vanessa\",\"Trijoulet\",role=c(\"aut\",\"cre\"), email=\"vtri@aqua.dtu.dk\"), person(\"Anders\",\"Nielsen\",role=\"aut\"))",
-      "Description": "Residual calculation for compositional observations ...",
-      "License": "GPL-2",
-      "Imports": [
-        "TMB",
-        "MASS",
-        "stats"
-      ],
-      "LinkingTo": [
-        "TMB",
-        "RcppEigen"
-      ],
-      "BugReports": "https://github.com/fishfollower/compResidual/issues",
-      "RoxygenNote": "7.2.3",
-      "Encoding": "UTF-8",
-      "RemoteType": "github",
-      "RemoteHost": "api.github.com",
-      "RemoteRepo": "compResidual",
-      "RemoteUsername": "fishfollower",
-      "RemoteRef": "HEAD",
-      "RemoteSha": "d4c74845089074d8016454f235044c5d13ded3a5",
-      "RemoteSubdir": "compResidual",
-      "NeedsCompilation": "yes",
-      "Author": "Vanessa Trijoulet [aut, cre], Anders Nielsen [aut]",
-      "Maintainer": "Vanessa Trijoulet <vtri@aqua.dtu.dk>"
-    },
     "conflicted": {
       "Package": "conflicted",
       "Version": "1.2.0",
@@ -2063,6 +2031,23 @@
       "NeedsCompilation": "yes",
       "Author": "Kaspar Moesinger [aut], Florian Gerber [aut] (<https://orcid.org/0000-0001-8545-5263>), Reinhard Furrer [cre, ctb] (<https://orcid.org/0000-0002-6319-2332>)",
       "Maintainer": "Reinhard Furrer <reinhard.furrer@uzh.ch>",
+      "Repository": "CRAN"
+    },
+    "dotenv": {
+      "Package": "dotenv",
+      "Version": "1.0.3",
+      "Source": "Repository",
+      "Title": "Load Environment Variables from '.env'",
+      "Authors@R": "c(person(\"Gábor\", \"Csárdi\", role = c(\"aut\", \"cre\", \"cph\"), email = \"csardi.gabor@gmail.com\"))",
+      "Description": "Load configuration from a '.env' file, that is in the current working directory, into environment variables.",
+      "License": "MIT + file LICENSE",
+      "URL": "https://github.com/gaborcsardi/dotenv",
+      "BugReports": "https://github.com/gaborcsardi/dotenv/issues",
+      "RoxygenNote": "5.0.1.9000",
+      "Encoding": "UTF-8",
+      "NeedsCompilation": "no",
+      "Author": "Gábor Csárdi [aut, cre, cph]",
+      "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
       "Repository": "CRAN"
     },
     "dplyr": {

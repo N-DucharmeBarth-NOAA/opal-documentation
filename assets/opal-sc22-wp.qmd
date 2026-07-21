@@ -953,33 +953,6 @@ bet_prediction_rows <- function(pred_list, fishery_f, row_fishery, n_eff) {
     n_eff = as.numeric(n_eff)
   )
 }
-bet_flat_to_count_list <- function(v, n_f, fishery_f, minbin, maxbin) {
-  out <- vector("list", length(n_f))
-  offset <- 0L
-  for (k in seq_along(n_f)) {
-    f <- fishery_f[k]
-    nbins <- maxbin[f] - minbin[f] + 1L
-    n_values <- n_f[k] * nbins
-    out[[k]] <- matrix(
-      v[seq.int(offset + 1L, length.out = n_values)],
-      nrow = n_f[k],
-      ncol = nbins,
-      byrow = TRUE
-    )
-    offset <- offset + n_values
-  }
-  out
-}
-bet_quiet_comp_residual_warnings <- function(expr) {
-  withCallingHandlers(
-    expr,
-    warning = function(w) {
-      if (grepl("NA/NaN function evaluation", conditionMessage(w), fixed = TRUE)) {
-        invokeRestart("muffleWarning")
-      }
-    }
-  )
-}
 bet_comp_residual_rows <- bind_rows(
   bet$diagnostics$lf_residuals,
   bet$diagnostics$wf_residuals
@@ -1172,95 +1145,37 @@ bet_agg6_comp_fit_summary <- bind_rows(
 ) %>%
   arrange(composition, fishery_num)
 
-bet_agg6_ts_to_decimal_year <- function(ts) {
-  bet_agg6_data$first_yr + (as.integer(ts) - 1L) %/% bet_agg6_data$n_season +
-    ((as.integer(ts) - 1L) %% bet_agg6_data$n_season) / bet_agg6_data$n_season
-}
-
-bet_agg6_comp_residual_rows_by_type <- function(type_label, obs_flat, pred_list,
-                                                n_by_row, n_f, fishery_f,
-                                                year_fi, minbin, maxbin, bins) {
-  obs_list <- bet_flat_to_count_list(obs_flat, n_f, fishery_f, minbin, maxbin)
-  row_offset <- 0L
-
-  map_dfr(seq_along(pred_list), function(i) {
-    f <- fishery_f[i]
-    n_rows <- n_f[i]
-    row_ids <- seq.int(row_offset + 1L, length.out = n_rows)
-    row_offset <<- row_offset + n_rows
-    active_bins <- bins[minbin[f]:maxbin[f]]
-    pred <- pred_list[[i]]
-    obs <- obs_list[[i]]
-    years <- year_fi[[as.character(f)]]
-
-    map_dfr(seq_len(n_rows), function(j) {
-      obs_prop <- bet_normalise_composition(obs[j, ])
-      pred_prop <- bet_normalise_composition(pred[j, ])
-      n_eff <- n_by_row[row_ids[j]]
-
-      if (anyNA(obs_prop) || anyNA(pred_prop) ||
-          !is.finite(n_eff) || n_eff <= 0) {
-        return(tibble())
-      }
-
-      pred_prop <- pred_prop + 1e-6
-      pred_prop <- pred_prop / sum(pred_prop)
-      residual <- as.numeric(bet_quiet_comp_residual_warnings(
-        compResidual::resMulti(
-          obs = matrix(obs_prop * n_eff, ncol = 1L),
-          pred = matrix(pred_prop, ncol = 1L)
-        )
-      ))
-      plot_year <- years[j]
-      if (!is.finite(plot_year) || plot_year < 1000) {
-        plot_year <- bet_agg6_ts_to_decimal_year(years[j])
-      }
-
-      tibble(
-        composition = type_label,
-        type = paste(type_label, "composition"),
-        Fishery = paste("Group", f),
-        fishery_num = f,
-        row = row_ids[j],
-        year = plot_year,
-        bin = active_bins[seq_along(residual)],
-        observed = obs_prop[seq_along(residual)],
-        predicted = pred_prop[seq_along(residual)],
-        n_eff = n_eff,
-        residual = residual,
-        sign = if_else(residual >= 0, "Positive", "Negative")
-      )
-    })
-  })
-}
-
-bet_agg6_comp_residual_rows <- bind_rows(
-  bet_agg6_comp_residual_rows_by_type(
-    type_label = "Length",
-    obs_flat = bet_agg6_data$lf_obs_flat,
-    pred_list = bet_agg6_report$lf_pred,
-    n_by_row = bet_agg6_data$lf_n,
-    n_f = bet_agg6_data$lf_n_f,
-    fishery_f = bet_agg6_data$lf_fishery_f,
-    year_fi = bet_agg6_data$lf_year_fi,
-    minbin = bet_agg6_data$lf_minbin,
-    maxbin = bet_agg6_data$lf_maxbin,
-    bins = bet_agg6_data$len_mid
-  ),
-  bet_agg6_comp_residual_rows_by_type(
-    type_label = "Weight",
-    obs_flat = bet_agg6_data$wf_obs_flat,
-    pred_list = bet_agg6_report$wf_pred,
-    n_by_row = bet_agg6_data$wf_n,
-    n_f = bet_agg6_data$wf_n_f,
-    fishery_f = bet_agg6_data$wf_fishery_f,
-    year_fi = bet_agg6_data$wf_year_fi,
-    minbin = bet_agg6_data$wf_minbin,
-    maxbin = bet_agg6_data$wf_maxbin,
-    bins = bet_agg6_data$wt_mid
+bet_agg6_residual_cache_path <- file.path(
+  dirname(bet_fit_path),
+  "opal_bet_agg6_comp_residuals.rds"
+)
+if (!file.exists(bet_agg6_residual_cache_path)) {
+  stop(
+    "BET six-fishery composition residual cache not found: ",
+    bet_agg6_residual_cache_path,
+    ". Rebuild it locally with analysis/build_bet_agg6_residual_cache.R."
   )
-) %>%
-  left_join(bet_agg6_group_labels, by = c("fishery_num" = "fishery"))
+}
+bet_agg6_residual_cache <- readRDS(bet_agg6_residual_cache_path)
+if (!is.list(bet_agg6_residual_cache) ||
+    !identical(bet_agg6_residual_cache$schema_version, 1L)) {
+  stop("BET six-fishery composition residual cache has an unsupported schema")
+}
+bet_agg6_comp_residual_rows <- bet_agg6_residual_cache$residual_rows
+bet_agg6_required_residual_columns <- c(
+  "composition", "type", "Fishery", "fishery_num", "row", "year", "bin",
+  "observed", "predicted", "n_eff", "residual", "sign", "group_label"
+)
+bet_agg6_missing_residual_columns <- setdiff(
+  bet_agg6_required_residual_columns,
+  names(bet_agg6_comp_residual_rows)
+)
+if (!is.data.frame(bet_agg6_comp_residual_rows) ||
+    !nrow(bet_agg6_comp_residual_rows) ||
+    length(bet_agg6_missing_residual_columns) ||
+    anyNA(bet_agg6_comp_residual_rows$group_label)) {
+  stop("BET six-fishery composition residual cache is missing required residual rows or columns")
+}
 
 bet_agg6_comp_sdnr_summary <- bet_agg6_comp_residual_rows %>%
   filter(is.finite(residual)) %>%

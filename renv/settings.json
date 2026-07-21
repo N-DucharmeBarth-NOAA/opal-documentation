@@ -1,7 +1,9 @@
 {
   "bioconductor.version": null,
   "external.libraries": [],
-  "ignored.packages": [],
+  "ignored.packages": [
+    "compResidual"
+  ],
   "lockfile.sanitize": true,
   "package.dependency.fields": [
     "Imports",
