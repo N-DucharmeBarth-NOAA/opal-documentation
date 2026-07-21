@@ -1,0 +1,45 @@
+on:
+  push:
+    branches: main
+
+name: Render and Deploy to Posit Connect
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies for R packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglpk-dev libxml2-dev libcurl4-openssl-dev libjpeg-dev libfontconfig1-dev libsecret-1-dev libudunits2-dev libgdal-dev libgeos-dev libproj-dev chromium-browser
+
+      - name: Set up R (needed for Rmd)
+        uses: r-lib/actions/setup-r@v2
+
+      - name: Install packages (needed for Rmd) using renv
+        uses: r-lib/actions/setup-renv@v2
+        env:
+          CHROMOTE_CHROME: /usr/bin/chromium-browser
+
+      - name: Set up Quarto
+        uses: quarto-dev/quarto-actions/setup@v2
+        with:
+          # To install LaTeX to build PDF 
+          tinytex: true 
+          # uncomment below and fill to pin a version
+          version: 1.6.41
+
+      - name: Render website for Connect
+        env:
+          CHROMOTE_CHROME: /usr/bin/chromium-browser
+        run: quarto render --profile connect
+
+      - name: Deploy to Posit Connect
+        env:
+          CONNECT_SERVER: ${{ secrets.CONNECT_SERVER }}
+          CONNECT_API_KEY: ${{ secrets.CONNECT_API_KEY }}
+          CONNECT_ACCOUNT: ${{ secrets.CONNECT_ACCOUNT }}
+        run: Rscript .github/workflows/deploy-to-connect.r
