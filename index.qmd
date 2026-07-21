@@ -21,11 +21,16 @@ listing:
           description: >
             WCPFC Scientific Committee working paper describing opal's architecture and the two case studies.
           display-order: 1
+        - path: https://github.com/N-DucharmeBarth-NOAA/opal
+          title: "Source code"
+          description: >
+            GitHub repository containing the source code for the `opal` R package.
+          display-order: 2
         - path: assets/opakapaka.html
           title: "'Opakapaka case study"
           description: >
             Vignette which configures, fits, and cross-platform benchmarks an `opal` stock assessment model for 'opakapaka.
-          display-order: 2
+          display-order: 3
     sort: "display-order"
 
 header-includes: >
@@ -83,7 +88,6 @@ opal is under active development. The case studies presented here are illustrati
 ## External resources
 
 - [opal package documentation](https://n-ducharmebarth-noaa.github.io/opal/)
-- [opal on GitHub](https://github.com/N-DucharmeBarth-NOAA/opal)
 - [RTMB](https://github.com/kaskr/RTMB) --- the automatic-differentiation engine opal is built on
 - [WCPFC](https://www.wcpfc.int/) --- Western and Central Pacific Fisheries Commission
 

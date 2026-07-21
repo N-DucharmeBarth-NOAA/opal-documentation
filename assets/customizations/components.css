@@ -392,11 +392,15 @@
   background-image: url('../images/opal-sc22.png');
 }
 
-   .g-col-1:nth-child(2) .quarto-grid-item {
-  background-image: url('../images/opakapaka.png');
+.g-col-1:nth-child(2) .quarto-grid-item {
+  background-image: url('../images/code.png');
 }
 
 .g-col-1:nth-child(3) .quarto-grid-item {
+  background-image: url('../images/opakapaka.png');
+}
+
+.g-col-1:nth-child(4) .quarto-grid-item {
   background-image: url('../images/bet.png');
 }
 
