@@ -1,0 +1,96 @@
+---
+pagetitle: "opal — the open population assessment library"
+page-layout: full
+title-block-banner: false
+format:
+  html:
+    toc: false
+
+listing:
+  - id: resource-listing
+    type: grid
+    max-items: 8
+    page-size: 6
+    categories: false
+    sort-ui: false
+    filter-ui: false
+    fields: [title, description]
+    contents:
+        - path: assets/opal-sc22-wp.html
+          title: "SC22 working paper"
+          description: >
+            WCPFC Scientific Committee working paper describing opal's architecture and the two case studies.
+          display-order: 1
+        - path: https://github.com/N-DucharmeBarth-NOAA/opal
+          title: "Source code"
+          description: >
+            GitHub repository containing the source code for the `opal` R package.
+          display-order: 2
+        - path: assets/opakapaka.html
+          title: "'Opakapaka case study"
+          description: >
+            Vignette which configures, fits, and cross-platform benchmarks an `opal` stock assessment model for 'opakapaka.
+          display-order: 3
+    sort: "display-order"
+
+header-includes: >
+  <link rel="stylesheet" href="assets/customizations/hero.css">
+resources:
+  - assets/customizations/hero.css
+  - assets/images/
+---
+
+```{=html}
+<div class="site-hero mb-5">
+  <div class="site-intro">
+    <h1 class="site-title text-primary mt-0 fw-lighter text-center text-sm-start">
+      opal
+    </h1>
+
+    <div class="species-info">
+      <h2 class="site-subtitle text-secondary mt-0 fw-lighter text-center text-sm-start">
+        the <span class="opal-brand">o</span>pen <span class="opal-brand">p</span>opulation <span class="opal-brand">a</span>ssessment <span class="opal-brand">l</span>ibrary
+      </h2>
+    </div>
+
+    <p class="site-intro fs-5">
+      <strong>opal</strong> is an open-source, modular R package for fisheries stock assessment,
+      built on <a href="https://github.com/kaskr/RTMB">RTMB</a> for automatic differentiation and
+      gradient-based optimization. It is developed under
+      <strong>WCPFC <a href="https://www.wcpfc.int/">Project 123</a></strong>: scoping the next
+      generation of tuna stock assessment software.
+    </p>
+
+    <div class="cta-buttons">
+      <a class="btn btn-primary" href="https://n-ducharmebarth-noaa.github.io/opal/">Documentation</a>
+      <a class="btn btn-outline-secondary" href="https://github.com/N-DucharmeBarth-NOAA/opal">View on GitHub</a>
+    </div>
+  </div>
+
+  <div class="site-logo">
+    <div class="logo-container">
+      <img src="assets/static/opal-HEX-transparent.png" alt="opal hex logo" class="noaa-logo">
+    </div>
+  </div>
+</div>
+```
+
+::: {.callout-note}
+## Development status
+opal is under active development. The case studies presented here are illustrative and are **not** intended to inform management advice.
+:::
+
+## Quick links {#resources}
+
+::: {#resource-listing}
+:::
+
+## External resources
+
+- [opal package documentation](https://n-ducharmebarth-noaa.github.io/opal/)
+- [RTMB](https://github.com/kaskr/RTMB) --- the automatic-differentiation engine opal is built on
+- [WCPFC](https://www.wcpfc.int/) --- Western and Central Pacific Fisheries Commission
+
+## Contact
+
+For questions about opal, open an issue on GitHub: <https://github.com/N-DucharmeBarth-NOAA/opal/issues>.
