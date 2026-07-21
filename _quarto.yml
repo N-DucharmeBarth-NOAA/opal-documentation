@@ -10,6 +10,7 @@ website:
   site-url: https://connect.fisheries.noaa.gov/opal/
   repo-url: https://github.com/N-DucharmeBarth-NOAA/opal-documentation
   repo-actions: [source, edit, issue]
+  favicon: "assets/static/opal-HEX-transparent.png"
 
   navbar:
     title: "opal"
