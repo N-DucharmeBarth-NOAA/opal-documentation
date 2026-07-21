@@ -1,0 +1,389 @@
+/*-- scss:defaults --*/
+// Typography - FIMS style fonts
+$web-font-path: "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;1,300;1,500&family=Outfit:wght@200;400;500;700&display=swap";
+
+// FIMS fonts (current)
+$font-family-sans-serif: -apple-system, BlinkMacSystemFont, avenir next, avenir, segoe ui, helvetica neue, helvetica, Cantarell, Ubuntu, roboto, noto, arial, sans-serif;
+$font-family-serif: Georgia, "Times New Roman", serif;
+$font-family-monospace: "IBM Plex Mono", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+$headings-font-family: Outfit, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+
+// Original NOAA fonts (commented out - uncomment to switch back)
+// $web-font-path: "https://fonts.googleapis.com/css2?family=Roboto+Serif:opsz,wght@8..144,300;8..144,400;8..144,500&family=Montserrat:wght@300;400;500;600;700&display=swap";
+// $font-family-sans-serif: 'Montserrat', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+// $font-family-serif: 'Roboto Serif', Georgia, "Times New Roman", serif;
+// $font-family-monospace: "SF Mono", Monaco, "Inconsolata", "Roboto Mono", "Source Code Pro", Menlo, Consolas, "DejaVu Sans Mono", monospace;
+// $headings-font-family: $font-family-serif;
+$headings-font-weight: 400;
+
+// Font sizes
+$h1-font-size: 2.5rem;
+$h2-font-size: 2rem;
+$h3-font-size: 1.75rem;
+$h4-font-size: 1.5rem;
+$h5-font-size: 1.25rem;
+$h6-font-size: 1rem;
+
+// Spacing
+$spacer: 1rem;
+$spacers: (
+  0: 0,
+  1: $spacer * .25,
+  2: $spacer * .5,
+  3: $spacer,
+  4: $spacer * 1.5,
+  5: $spacer * 3,
+  6: $spacer * 4,
+  7: $spacer * 5,
+);
+
+// Borders
+$border-width: 1px;
+$border-radius: 0.5rem;
+$border-radius-sm: 0.25rem;
+$border-radius-lg: 0.75rem;
+
+// Shadows
+$box-shadow-sm: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+$box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+$box-shadow-lg: 0 1rem 3rem rgba(0, 0, 0, 0.175);
+
+// Transitions
+$transition-base: all 0.2s ease-in-out;
+$transition-fade: opacity 0.15s linear;
+$transition-collapse: height 0.35s ease;
+
+/*-- scss:rules --*/
+
+// Import web fonts
+@if $web-font-path {
+  @import url($web-font-path);
+}
+
+// Typography improvements
+h1, h2, h3, h4, h5, h6 {
+  font-family: $headings-font-family;
+  font-weight: $headings-font-weight;
+  line-height: 1.3;
+  margin-top: 1.5em;
+  margin-bottom: 0.75em;
+}
+
+h1 {
+  font-size: clamp(2rem, 4vw, $h1-font-size);
+  font-weight: 300;
+}
+
+h2 {
+  font-size: clamp(1.5rem, 3vw, $h2-font-size);
+  border-bottom: 2px solid var(--bs-border-color, #dee2e6);
+  padding-bottom: 0.5rem;
+}
+
+h3 {
+  font-size: clamp(1.25rem, 2.5vw, $h3-font-size);
+}
+
+// Body text improvements
+body {
+  line-height: 1.6;
+  font-family: $font-family-sans-serif;
+}
+
+p {
+  margin-bottom: 1.25rem;
+}
+
+// Link styling
+a {
+  text-decoration: none;
+  transition: $transition-base;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+// Content width management
+#quarto-content {
+  max-width: 100vw;
+  width: 100vw;
+  padding-left: 0;
+  padding-right: 0;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+main.content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+// Navbar improvements
+.navbar {
+  font-family: $font-family-sans-serif;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  box-shadow: $box-shadow-sm;
+}
+
+.navbar-brand {
+  font-weight: 600;
+  font-size: 1.25rem;
+}
+
+.nav-link {
+  position: relative;
+  transition: $transition-base;
+}
+
+// Sidebar improvements
+.sidebar {
+  font-family: $font-family-sans-serif;
+  box-shadow: $box-shadow-sm;
+}
+
+.sidebar-item {
+  margin-bottom: 0.5rem;
+  border-radius: $border-radius-sm;
+  transition: $transition-base;
+}
+
+.sidebar-item:hover {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.sidebar-item-text {
+  padding: 0.5rem 0.75rem;
+  display: block;
+  transition: $transition-base;
+}
+
+// Button improvements
+.btn {
+  border-radius: $border-radius;
+  font-weight: 500;
+  padding: 0.5rem 1rem;
+  transition: all 0.2s ease-in-out;
+  border-width: 1px;
+  border-style: solid;
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+  box-shadow: $box-shadow;
+}
+
+.btn:active {
+  transform: translateY(0);
+}
+
+// Card improvements
+.card {
+  border-radius: $border-radius;
+  box-shadow: $box-shadow-sm;
+  transition: $transition-base;
+  border-width: 1px;
+}
+
+.card:hover {
+  box-shadow: $box-shadow;
+  transform: translateY(-2px);
+}
+
+.card-header {
+  font-weight: 600;
+  border-bottom-width: 1px;
+}
+
+.card-body {
+  padding: 1.5rem;
+}
+
+// Table improvements
+.table {
+  margin-bottom: 2rem;
+  box-shadow: $box-shadow-sm;
+  border-radius: $border-radius;
+  overflow: hidden;
+}
+
+.table th {
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 0.875rem;
+  letter-spacing: 0.5px;
+  padding: 1rem;
+}
+
+.table td {
+  padding: 0.75rem 1rem;
+  vertical-align: middle;
+}
+
+// Code blocks
+.sourceCode {
+  border-radius: $border-radius;
+  margin-bottom: 1.5rem;
+  box-shadow: $box-shadow-sm;
+}
+
+pre {
+  border-radius: $border-radius;
+  padding: 1rem;
+}
+
+code {
+  font-family: $font-family-monospace;
+  font-size: 0.875rem;
+}
+
+// Callouts
+.callout {
+  border-radius: $border-radius;
+  padding: 1rem 1.5rem;
+  margin: 1.5rem 0;
+  border-left-width: 5px;
+  border-left-style: solid;
+  box-shadow: $box-shadow-sm;
+}
+
+.callout-header {
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+
+// Figures and images
+figure {
+  margin: 2rem 0;
+  text-align: center;
+}
+
+figcaption {
+  font-style: italic;
+  color: var(--bs-secondary-color, #6c757d);
+  margin-top: 0.5rem;
+  font-size: 0.9rem;
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+  border-radius: $border-radius;
+}
+
+// Lists
+ul, ol {
+  padding-left: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+li {
+  margin-bottom: 0.5rem;
+}
+
+// Blockquotes
+blockquote {
+  border-left: 4px solid var(--bs-primary, #0d6efd);
+  padding-left: 1rem;
+  margin: 1.5rem 0;
+  font-style: italic;
+  color: var(--bs-secondary-color, #6c757d);
+}
+
+// Forms
+.form-control {
+  border-radius: $border-radius;
+  border-width: 1px;
+  padding: 0.5rem 0.75rem;
+  transition: $transition-base;
+}
+
+.form-control:focus {
+  box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.25);
+}
+
+// Responsive utilities
+@media (max-width: 768px) {
+  main.content {
+    padding: 0 0.5rem;
+  }
+  
+  .table-responsive {
+    border-radius: $border-radius;
+  }
+  
+  .card {
+    margin-bottom: 1rem;
+  }
+}
+
+// Print styles
+@media print {
+  .navbar,
+  .sidebar,
+  .nav-footer {
+    display: none !important;
+  }
+  
+  main.content {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  
+  .card {
+    box-shadow: none !important;
+    border: 1px solid #ccc !important;
+  }
+}
+
+// Accessibility improvements
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+// Focus styles
+*:focus {
+  outline: 2px solid var(--bs-primary, #0d6efd);
+  outline-offset: 2px;
+}
+
+// Smooth scrolling
+html {
+  scroll-behavior: smooth;
+}
+
+// Selection styling
+::selection {
+  background-color: rgba(var(--bs-primary-rgb), 0.3);
+}
+
+// Utility classes
+.text-center { text-align: center; }
+.text-left { text-align: left; }
+.text-right { text-align: right; }
+
+.mb-0 { margin-bottom: 0; }
+.mb-1 { margin-bottom: 0.25rem; }
+.mb-2 { margin-bottom: 0.5rem; }
+.mb-3 { margin-bottom: 1rem; }
+.mb-4 { margin-bottom: 1.5rem; }
+.mb-5 { margin-bottom: 3rem; }
+
+.mt-0 { margin-top: 0; }
+.mt-1 { margin-top: 0.25rem; }
+.mt-2 { margin-top: 0.5rem; }
+.mt-3 { margin-top: 1rem; }
+.mt-4 { margin-top: 1.5rem; }
+.mt-5 { margin-top: 3rem; }

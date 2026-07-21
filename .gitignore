@@ -3,3 +3,9 @@
 .RData
 .Ruserdata
 opal-documentation.Rproj
+
+/.quarto/
+**/*.quarto_ipynb
+_output/
+rsconnect/*
+*.dcf

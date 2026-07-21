@@ -1,0 +1,30 @@
+---
+title: "About opal"
+---
+
+opal is an open-source, modular R package for fisheries stock assessment, built on [RTMB](https://github.com/kaskr/RTMB) for automatic differentiation, gradient-based optimization, and the Laplace approximation. It is developed under [WCPFC Project 123](https://www.wcpfc.int/): scoping the next generation of tuna stock assessment software.
+
+## What opal does
+
+- Estimates age-structured population dynamics with length-based processes.
+- Fits to CPUE, length-composition, and weight-composition data, with demographics specified on an age or length basis.
+- Supports log-normal CPUE and multinomial, Dirichlet, and Dirichlet-multinomial composition likelihoods.
+- Estimates parameters by gradient-based optimization (`nlminb`), with random effects via the Laplace approximation and Bayesian inference through `SparseNUTS`.
+- Includes built-in diagnostics: estimability checks, parameter-correlation summaries, one-step-ahead residuals, and with the capability for simulation self-tests.
+- Catch-based projections and MCMC-based uncertainty quantification are in active development.
+
+## Design
+
+opal is written entirely in R, so the full model definition lives in a single language that is straightforward to inspect and extend. Its components --- growth, selectivity, recruitment, spawning potential, and the likelihoods --- are implemented as modular functions that can be combined as needed. The package builds on the `sbt` package developed for the southern bluefin tuna assessment and draws design influences from established platforms including Stock Synthesis (SS3) and MULTIFAN-CL (MFCL).
+
+## Status
+
+::: {.callout-note}
+opal is under active development. Any described case studies are illustrative and are **not** intended to inform management advice.
+:::
+
+## Learn more
+
+- [SC22 working paper](assets/opal-sc22-wp.html) --- model description and two case studies
+- [opal package documentation](https://n-ducharmebarth-noaa.github.io/opal/) --- function reference and vignettes
+- [opal on GitHub](https://github.com/N-DucharmeBarth-NOAA/opal)

@@ -55,8 +55,6 @@ format:
     filters:
       - inline-code.lua
     header-includes: |
-     \usepackage{draftwatermark}
-     \SetWatermarkLightness{0.92}
      \usepackage{pdflscape}
      \providecommand{\citeproc}[2]{#2}
   html:
@@ -74,24 +72,6 @@ bibliography: opal.bib
 csl: apa.csl
 
 ---
-
-```{=html}
-<style>
-.draft-watermark {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%) rotate(-45deg);
-  font-size: 100px;
-  font-weight: bold;
-  color: #ccc;
-  opacity: 0.5;
-  z-index: -1000;
-  pointer-events: none;
-}
-</style>
-<div class="draft-watermark">DRAFT</div>
-```
 
 ```{r}
 #| label: setup-opal
