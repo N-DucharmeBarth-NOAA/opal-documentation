@@ -201,6 +201,9 @@ if (is.na(paka_fit_path)) {
   paka_fit_path <- file.path(paka_cache_dir, "opal_lf-re_fit.rds")
 }
 
+pres_cache <- file.path(doc_dir, "cached", "pres")
+dir.create(pres_cache, recursive = TRUE, showWarnings = FALSE)
+
 ## ---- Fit + diagnostics (fully cached) ------------------------------------
 # On a cache hit nothing from opal/RTMB is rebuilt: the document consumes only
 # the plain-R results bundle (`paka`). The model is built, fitted, and
@@ -2001,7 +2004,7 @@ paka_opal_re$hi95 = paka_opal_re$value + 1.96 * paka_opal_re$se
 
 ybmax_lf <- max(paka$ssb$estimate, paka$om$SSB, paka$em$SSB, na.rm = TRUE)
 
-ggplot() +
+p <- ggplot() +
   geom_ribbon(data = paka_opal_fe,
               aes(year, ymin = lo95, ymax = hi95, fill = model), alpha = 0.25) +
   geom_ribbon(data = paka_opal_re,
@@ -2022,6 +2025,9 @@ ggplot() +
   labs(x = "Year", y = "Spawning biomass", colour = NULL) +
   scale_y_continuous(limits = c(0, ybmax_lf * 1.2)) +
   theme_opal()
+
+print(p)
+saveRDS(p, file.path(pres_cache, "paka-biomass.rds"))
 ```
 
 ```{r}
@@ -2094,8 +2100,9 @@ p_traj <- ggplot() +
   ggtitle("CPUE trajectories") +
   theme_opal()
 
-p_traj + p_dens + p_pit +
-  plot_annotation(tag_levels = "A")
+p_ppc <- p_traj + p_dens + p_pit + plot_annotation(tag_levels = "A")
+print(p_ppc)
+saveRDS(p_ppc, file.path(pres_cache, "paka-cpue-ppc.rds"))
 ```
 
 ```{r}
@@ -2122,7 +2129,7 @@ ggplot(paka$mcmc_trace, aes(iter, value, colour = chain)) +
 #| fig-height: 4.5
 #| fig-width: 8
 
-ggplot() +
+p <- ggplot() +
   geom_ribbon(data = paka$proj_hist_ribbon,
               aes(year, ymin = lo90, ymax = hi90, fill = method), alpha = 0.12) +
   geom_ribbon(data = paka$proj_hist_ribbon,
@@ -2146,6 +2153,8 @@ ggplot() +
   scale_colour_manual(values = opal_proj) +
   labs(x = "Year", y = "Spawning biomass", colour = "Method", fill = "Method") +
   theme_opal()
+print(p)
+saveRDS(p, file.path(pres_cache, "paka-proj.rds"))
 ```
 
 ```{r}
@@ -2306,7 +2315,7 @@ cpue_gof_labels <- bet_cpue_combined %>%
     by = "model"
   )
 
-ggplot(bet_cpue_combined, aes(x = year)) +
+p <- ggplot(bet_cpue_combined, aes(x = year)) +
   geom_line(data = bet_cpue_sim,
             aes(y = simulated, group = sim_id),
             colour = opal_role["simulated"], alpha = 0.5, linewidth = 0.32) +
@@ -2326,6 +2335,8 @@ ggplot(bet_cpue_combined, aes(x = year)) +
   scale_colour_opal(breaks = c("opal", "6-fishery opal", "SS3", "MFCL")) +
   labs(x = "Year", y = "Standardized CPUE", colour = "Model") +
   theme_opal()
+print(p)
+saveRDS(p, file.path(pres_cache, "bet-cpue-fit.rds"))
 ```
 
 ```{r}
@@ -3331,7 +3342,7 @@ xmodel_long <- bet_xmodel %>%
 bet_combined <- bind_rows(bet_biomass, bet_agg6_biomass, xmodel_long) %>%
   filter(year <= 2018)
 
-ggplot(bet_combined, aes(x = year, y = value, colour = model, fill = model)) +
+p <- ggplot(bet_combined, aes(x = year, y = value, colour = model, fill = model)) +
   geom_ribbon(data = filter(bet_combined, is.finite(lower), is.finite(upper)),
               aes(ymin = lower, ymax = upper),
               alpha = 0.18, colour = NA) +
@@ -3343,4 +3354,6 @@ ggplot(bet_combined, aes(x = year, y = value, colour = model, fill = model)) +
   scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
   theme_opal() +
   guides(fill = "none")
+print(p)
+saveRDS(p, file.path(pres_cache, "bet-biomass.rds"))
 ```

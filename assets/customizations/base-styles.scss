@@ -1,12 +1,8 @@
 /*-- scss:defaults --*/
 
-// Fonts (commented out - uncomment to switch back)
-$web-font-path: "https://fonts.googleapis.com/css2?family=Roboto+Serif:opsz,wght@8..144,300;8..144,400;8..144,500&family=Montserrat:wght@300;400;500;600;700&family=Outfit:wght@200;400;500;700&display=swap";
-$font-family-sans-serif: 'Montserrat', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-$font-family-serif: 'Roboto Serif', Georgia, "Times New Roman", serif;
-$font-family-monospace: "SF Mono", Monaco, "Inconsolata", "Roboto Mono", "Source Code Pro", Menlo, Consolas, "DejaVu Sans Mono", monospace;
-$headings-font-family: Outfit, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
-$headings-font-weight: 400;
+// Shared typography source of truth.
+@import 'opal-palette';
+@import 'typography';
 
 // Font sizes
 $h1-font-size: 2.5rem;
@@ -46,6 +42,8 @@ $transition-fade: opacity 0.15s linear;
 $transition-collapse: height 0.35s ease;
 
 /*-- scss:rules --*/
+
+@import 'brand-components';
 
 // Import web fonts
 @if $web-font-path {

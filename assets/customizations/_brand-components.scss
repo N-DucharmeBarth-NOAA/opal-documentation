@@ -1,0 +1,16 @@
+// Shared brand components. Layout remains in the consuming website or
+// presentation stylesheet; these rules only define brand typography/colors.
+
+.opal-brand {
+  color: $opal-blue;
+  font-family: 'Anta', sans-serif;
+  font-weight: 400;
+}
+
+.opal-subtitle {
+  color: $blue-70;
+  font-family: $headings-font-family;
+  font-weight: 300;
+  font-style: italic;
+  line-height: 1.05;
+}

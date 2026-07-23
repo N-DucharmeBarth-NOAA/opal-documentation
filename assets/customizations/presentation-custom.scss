@@ -1,0 +1,258 @@
+// opal presentation theme
+// Re-implements the slide-class architecture used across the deck
+// (title sidebar, content sidebar, emphasis colours, fragment colours)
+// using the opal colour palette. No content is inherited from any other repo;
+// only the formatting pattern is reused.
+
+/*-- scss:defaults --*/
+
+// Sass variables do not cascade between Quarto theme files. Import the
+// shared typography partial so the presentation uses the same source of
+// truth as the website theme.
+@import 'opal-palette';
+@import 'typography';
+
+// opal palette (derived from the opal hex logo)
+$opal-grey:      #4D4D4D;   // truth / operating model
+$opal-observed:  #B3B3B3;   // observed data
+$opal-aqua:      #7DD2DB;   // simulated replicates
+$opal-ink:       #1c2b36;   // body text
+$opal-background: #ffffff;
+
+// Theme colours
+$body-bg: $opal-background;
+$body-color: $opal-ink;
+$link-color: $opal-teal;
+$presentation-heading-color: $opal-navy;
+
+// Theme fonts
+$presentation-heading-font: $headings-font-family;
+$presentation-heading-font-weight: $headings-font-weight;
+$presentation-h1-font-size: 2em;
+
+/*-- scss:rules --*/
+
+@if $web-font-path {
+  @import url($web-font-path);
+}
+
+@import 'brand-components';
+
+// -------------------------------------------------------------------------
+// Sidebar images
+// Point these at whatever sidebar image(s) you commit to the repo.
+// Defaults follow the same absolute-URL pattern the template uses so the
+// deck renders as soon as the image is pushed. To use one image for both,
+// leave them equal. To use a local file instead, swap in e.g.
+//   'static/opal-slide-sidebar.png'
+// (note: local paths in compiled SCSS resolve relative to the output CSS,
+//  so the absolute raw-URL approach is the most robust for GitHub Pages).
+// -------------------------------------------------------------------------
+$sidebar-image-title: 'https://raw.githubusercontent.com/N-DucharmeBarth-NOAA/opal-documentation/main/assets/static/opal-title-sidebar-1.png';
+$sidebar-image-slide: 'https://raw.githubusercontent.com/N-DucharmeBarth-NOAA/opal-documentation/main/assets/static/opal-slide-sidebar.png';
+
+// Slide dimensions for backgrounds
+$slide-width: 100vw;
+$slide-height: 100vh;
+
+@mixin full-screen-background {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 100vh !important;
+  width: 100vw !important;
+  z-index: -1;
+  pointer-events: none;
+}
+
+// Title slide: wide sidebar
+@mixin wide-sidebar {
+  @include full-screen-background;
+  width: 35vw !important;
+  background-image: url('#{$sidebar-image-title}');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+// Content slide: narrow sidebar
+@mixin narrow-sidebar {
+  @include full-screen-background;
+  width: 5vw !important;
+  background-image: url('#{$sidebar-image-slide}');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+// Content layout classes (independent of background styling)
+.content-with-wide-sidebar {
+  margin-left: 40% !important;
+  width: 60% !important;
+  padding-top: 0 !important;
+}
+
+.content-with-narrow-sidebar {
+  margin-left: 2% !important;
+  width: 98% !important;
+  padding-top: 0 !important;
+}
+
+// Frosted title box
+.titlebox {
+  padding: 0.2em 0.4em;
+  background-color: rgba(255, 255, 255, .20);
+  backdrop-filter: blur(20px);
+  box-shadow: 0 0 3rem 0 rgba(0, 0, 0, .2);
+  border-radius: 30px;
+}
+
+// Emphasis helpers
+.opal-title {
+  font-weight: 600;
+}
+
+.sim    { color: $opal-aqua; font-weight: 600; }
+.teal   { color: $opal-teal;  font-weight: 600; }
+.navy   { color: $opal-navy;  font-weight: 600; }
+.coral  { color: $opal-coral; font-weight: 600; }
+.gold   { color: $opal-gold;  font-weight: 600; }
+.grey   { color: $opal-grey;  font-weight: 600; }
+.muted  { color: $opal-grey; }
+
+.font-small { font-size: smaller; }
+.bg { color: $body-bg; }
+
+.hide-text { color: $opal-observed; }
+
+// Model-colour swatches for legends written in prose
+.m-opal { color: $opal-teal;  font-weight: 600; }
+.m-ss3  { color: $opal-navy;  font-weight: 600; }
+.m-mfcl { color: $opal-coral; font-weight: 600; }
+.m-truth { color: $opal-grey; font-weight: 600; }
+
+// Underline hyperlinks
+.reveal .slide a { text-decoration: underline; }
+.reveal .slide a.hiddenlink { text-decoration: none; color: $opal-observed; }
+
+.highlight-last {
+  color: rgba($opal-ink, .5);
+  .current-fragment { color: $opal-ink; }
+}
+
+// Inline code accent
+.reveal code { color: $opal-navy; }
+
+// Fragment colour maps ----------------------------------------------------
+$colors: (
+  "teal":  $opal-teal,
+  "navy":  $opal-navy,
+  "coral": $opal-coral,
+  "grey":  $opal-grey,
+  "gold":  $opal-gold
+);
+
+// emphasise fragment when visible
+@each $name, $color in $colors {
+  .reveal .slides section .fragment.hl-#{$name} {
+    opacity: unset;
+    visibility: unset;
+    &.visible { color: $color; font-weight: 600; }
+  }
+}
+
+// emphasise current fragment
+@each $name, $color in $colors {
+  .reveal .slides section .fragment.hl-cur-#{$name} {
+    opacity: unset;
+    visibility: unset;
+    &.current-fragment { color: $color; font-weight: 600; }
+  }
+}
+
+// fade text to colour
+@each $name, $color in $colors {
+  .reveal .slides section .fragment.fade-#{$name} {
+    opacity: unset;
+    visibility: unset;
+    &.visible { color: rgba($color, .5); }
+  }
+}
+
+// Apply background styling
+.wide-sidebar-bg {
+  position: relative;
+  &::before { content: ""; @include wide-sidebar; }
+}
+
+.narrow-sidebar-bg {
+  position: relative;
+  &::before { content: ""; @include narrow-sidebar; }
+}
+
+// Horizontal rule under the title on content slides
+.horizontal-line {
+  position: absolute;
+  top: 80px;
+  left: 2%;
+  right: 5%;
+  height: 2px;
+  background-color: $opal-teal;
+  z-index: 10;
+  pointer-events: none;
+}
+
+// custom fragment animation for moving the opakapaka image
+.fragment.move-fish {
+  opacity: 1 !important;
+  visibility: visible !important;
+  transition: all 0.8s ease-in-out;
+
+  &.visible {
+    top: 25% !important;
+    left: 62% !important;
+  }
+}
+
+// -------------------------------------------------------------------------
+// Fitted figures
+// Add `.fit-figure` to an `.absolute` div that has BOTH width= and height=.
+// The image is scaled down proportionally until it fits inside that box:
+// no clipping, no scrollbar, no forced aspect ratio.
+//
+// The key move is `display: contents` on Quarto's chunk-output wrappers.
+// Percentage heights resolve against the parent's height, and those wrappers
+// are all height:auto -- so `max-height: 100%` on the img would resolve to
+// `none`. Dissolving the wrapper boxes makes the img a direct child of the
+// flex container, which has a definite height, so max-height works.
+//
+// NOTE: do not set `out-width`/`out-height` on chunks using this class.
+// Those emit inline styles on the <img>, which override these rules.
+// -------------------------------------------------------------------------
+.reveal .fit-figure {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+ 
+// Dissolve Quarto's wrapper boxes (and their margins) so the <img> is a
+// direct flex child of the sized container.
+.reveal .fit-figure .cell,
+.reveal .fit-figure .cell-output,
+.reveal .fit-figure .cell-output-display,
+.reveal .fit-figure .quarto-figure,
+.reveal .fit-figure figure,
+.reveal .fit-figure p {
+  display: contents;
+}
+ 
+.reveal .fit-figure img,
+.reveal .fit-figure svg {
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  margin: 0;
+  border: 0;
+  box-shadow: none;
+}
