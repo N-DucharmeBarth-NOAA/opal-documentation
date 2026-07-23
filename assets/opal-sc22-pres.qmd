@@ -114,8 +114,8 @@ show_cached_fig <- function(name) {
 - `opal` — the [o]{.opal-brand}pen [p]{.opal-brand}opulation [a]{.opal-brand}ssessment [l]{.opal-brand}ibrary — is an open-source, modular R package for fisheries stock assessment.
 - Built on `RTMB` for rapid prototyping, automatic differentiation, optimization, and random-effects estimation; it also supports Bayesian inference.
 - Focused on diagnostics: estimability checks, one-step-ahead residuals, and simulation-based model checking.
-- A single R codebase makes models straightforward to inspect, modify, and extend.
-- Developed under [WCPFC Project 123]{.navy} as a [proof-of-concept]{.teal} for modular R-based assessment software.
+- Created with a single R codebase, `opal` makes models straightforward to inspect, modify, and extend.
+- Developed under [WCPFC Project 123]{.navy} within the Pacific region, for the Pacific, and on a timeline that meets the needs of the WCPFC.
 :::
 
 ## Where did `opal` come from? {.narrow-left-bg-image .smaller}

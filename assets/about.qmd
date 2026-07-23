@@ -2,7 +2,12 @@
 title: "About opal"
 ---
 
-opal is an open-source, modular R package for fisheries stock assessment, built on [RTMB](https://github.com/kaskr/RTMB) for automatic differentiation, gradient-based optimization, and the Laplace approximation. It is developed under [WCPFC Project 123](https://www.wcpfc.int/): scoping the next generation of tuna stock assessment software.
+## What is opal?
+
+- opal  — the open population assessment library —  is an open-source, modular R package for fisheries stock assessment
+- Built on `RTMB` for rapid prototyping, automatic differentiation, optimization, and random-effects estimation; it also supports Bayesian inference.
+- Focused on diagnostics: estimability checks, one-step-ahead residuals, and simulation-based model checking.
+- Developed under [WCPFC Project 123]{.navy} within the Pacific region, for the Pacific, and on a timeline that meets the needs of the WCPFC.
 
 ## What opal does
 

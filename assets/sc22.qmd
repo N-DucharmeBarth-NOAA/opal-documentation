@@ -23,4 +23,4 @@ This page collects the opal materials prepared for the [Western and Central Paci
 
 ## Presentation
 
-{{< revealjs file="opal-sc22-pres.html" height="500px" class="ratio ratio-16x9" >}}
+{{< html file="opal-sc22-pres.html" height="500px" width="100%" >}}
