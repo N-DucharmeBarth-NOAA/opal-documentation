@@ -1,0 +1,26 @@
+---
+title: "WCPFC SC22 — Apia, Samoa"
+format: 
+  html:
+    toc: true
+---
+
+This page collects the opal materials prepared for the [Western and Central Pacific Fisheries Commission (WCPFC) 22nd Regular Session of the Scientific Committee (SC22)](https://meetings.wcpfc.int/meetings/sc22),  held in Apia, Samoa, from 11–19 August 2026. The working paper is also available on the [WCPFC SC22 meeting page](https://meetings.wcpfc.int/node/32247), and the accompanying presentation is available below.
+
+## Working paper
+
+### HTML
+
+{{< html file="opal-sc22-wp.html" height="500px" width="100%">}}
+
+<br>
+
+### PDF
+
+{{< pdf file="opal-sc22-wp.pdf"  height="500px">}}
+
+<br>
+
+## Presentation
+
+{{< revealjs file="opal-sc22-pres.html" height="500px" class="ratio ratio-16x9" >}}

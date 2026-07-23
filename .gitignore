@@ -9,3 +9,4 @@ opal-documentation.Rproj
 _output/
 rsconnect/*
 *.dcf
+site_libs/

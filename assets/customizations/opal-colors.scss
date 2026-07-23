@@ -10,11 +10,7 @@
 // noaa-colors.scss / noaa-light.scss.
 
 // opal brand anchors
-$opal-blue:  #003087; // primary (logo dark blue)
-$opal-teal:  #27A7BE; // secondary accent teal
-$opal-gold:  #FCCF43; // logo gold — fails WCAG as text, so used only for fills
-$opal-coral: #D92208; // warm secondary accent
-$opal-navy:  #001f59; // deeper blue accent
+@import "opal-palette";
 
 // Brand aliases (kept for compatibility with the light/dark theme files that
 // reference $noaa-* names). Values are opal-appropriate, not NOAA.

@@ -10,10 +10,4 @@
     background-origin: content-box;
   } */
 
-@import url("https://fonts.googleapis.com/css2?family=Anta&display=swap");
-
-.opal-brand {
-  color: var(--opal-blue);
-  font-family: "Anta", sans-serif;
-  font-weight: 400;
-}
+/* Shared brand styles are compiled from _brand-components.scss. */

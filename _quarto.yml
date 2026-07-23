@@ -26,8 +26,8 @@ website:
         href: assets/development.qmd
       - text: "WCPFC docs"
         menu:
-          - text: "SC22 working paper"
-            href: assets/opal-sc22-wp.html
+          - text: "SC22"
+            href: assets/sc22.html
       - text: "Vignettes"
         menu:
           - text: "'Opakapaka case study"

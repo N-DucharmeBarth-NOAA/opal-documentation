@@ -1,0 +1,20 @@
+// Shared opal palette tokens. Website and presentation themes import this
+// partial so their Sass values cannot drift apart.
+
+$opal-blue:  #003087 !default;
+$opal-teal:  #27A7BE !default;
+$opal-gold:  #FCCF43 !default;
+$opal-coral: #D92208 !default;
+$opal-navy:  #001f59 !default;
+
+$blue-100: #f2f6fd !default;
+$blue-95:  #e7eefb !default;
+$blue-90:  #d6e3fb !default;
+$blue-80:  #adc7f5 !default;
+$blue-70:  #7fa6ec !default;
+$blue-60:  #4f83de !default;
+$blue-50:  $opal-blue !default;
+$blue-40:  #002a76 !default;
+$blue-30:  #002364 !default;
+$blue-20:  #001c52 !default;
+$blue-10:  #00123a !default;
