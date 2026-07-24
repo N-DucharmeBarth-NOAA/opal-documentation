@@ -9,7 +9,7 @@ format:
     theme: [default, customizations/presentation-custom.scss]
     slide-number: true
     footer: "WCPFC-SC22-2026/SA-WP-02"
-    embed-resources: false
+    embed-resources: true
     include-in-header:
       - text: |
           <script>
