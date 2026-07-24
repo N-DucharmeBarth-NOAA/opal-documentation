@@ -9,6 +9,7 @@ format:
     theme: [default, customizations/presentation-custom.scss]
     slide-number: true
     footer: "WCPFC-SC22-2026/SA-WP-02"
+    embed-resources: false
     include-in-header:
       - text: |
           <script>
@@ -22,7 +23,6 @@ format:
           <script src="customizations/opal-branding.js"></script>
     css:
       - customizations/logos.css
-    self-contained: true
 resources:
   - "static/**"
 revealjs-plugins:
