@@ -1,0 +1,887 @@
+---
+title: "Retrospective analysis and the significance of Mohn's rho"
+format:
+	html:
+		embed-resources: false
+		html-math-method: mathml
+		code-fold: true
+		code-summary: "Show code"
+execute:
+	eval: true
+	warning: false
+---
+
+```{r}
+#| include: false
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>")
+```
+
+# Introduction
+
+A retrospective analysis refits an assessment model after sequentially removing
+terminal data. Mohn's $\rho$ summarises the average relative change between the
+terminal estimate in each peel and the estimate from the full fit. This
+self-contained vignette reconstructs the retained WCPO bigeye tuna (BET) fit,
+then builds its retrospective peel series.
+
+The common rule of thumb $(-0.15, 0.20)$ is shown only as context. A Mohn's
+$\rho$ statistic has a model- and data-dependent sampling distribution and is
+not itself a measure of estimation bias.
+
+# Setup
+
+```{r}
+#| label: load-pkg
+#| echo: true
+#| message: false
+library(opal)
+library(RTMB)
+library(tidyverse)
+
+theme_set(theme_bw())
+
+find_repo_root <- function() {
+	candidates <- normalizePath(c(".", ".."), mustWork = FALSE)
+	hits <- candidates[file.exists(file.path(candidates, "assets", "cached", "bet",
+																					 "opal_bet_fit.rds"))]
+	if (!length(hits)) {
+		stop("Cannot locate assets/cached/bet/opal_bet_fit.rds. Render from the ",
+				 "opal-documentation repository or its assets directory.")
+	}
+	hits[[1]]
+}
+
+repo_dir <- find_repo_root()
+cache_dir <- file.path(repo_dir, "assets", "cached", "bet", "retro")
+cache_file <- file.path(cache_dir, "bet_retro.rds")
+dir.create(cache_dir, showWarnings = FALSE, recursive = TRUE)
+retro_cache <- if (file.exists(cache_file)) readRDS(cache_file) else list()
+cache_hit <- function(key) !is.null(retro_cache[[key]])
+```
+
+::: {.callout-note}
+## Caching
+
+The cache stores only plain-R outputs. RTMB AD objects are rebuilt in every R
+session and are never serialized.
+:::
+
+## Reference configuration
+
+```{r}
+#| label: config
+#| echo: true
+bet_config <- list(
+	lf_fisheries = c(8L, 9L, 10L, 11L, 12L, 13L, 14L),
+	wf_fisheries = c(1L, 2L, 3L, 4L, 6L, 7L, 15L),
+	lf_var_adjust = 400,
+	lf_var_override = c(`8` = 25000, `10` = 1600),
+	wf_var_adjust = 10000,
+	wf_var_override = c(`3` = 40000, `6` = 40000, `7` = 40000),
+	lf_switch = 1L,
+	wf_switch = 1L,
+	cpue_switch = 1L,
+	cpue_tau = 1e-8,
+	n_peel = 1L,
+	quarters_per_year = 4L
+)
+```
+
+## Reconstructing the retained fit
+
+The promoted fit cache contains the exact full-period data used by the retained
+fit, together with the optimum and diagnostics. It does not contain RTMB AD
+objects, which are rebuilt below. The embedded source composition data are used
+only to rebuild the derived LF/WF structures for shortened peels.
+
+```{r}
+#| label: reference-inputs
+#| echo: true
+#| message: false
+base_fit_path <- file.path(repo_dir, "assets", "cached", "bet", "opal_bet_fit.rds")
+base_fit <- readRDS(base_fit_path)
+if (is.null(base_fit$opt$par) || is.null(base_fit$diagnostics$selectivity_raw)) {
+	stop("Retained BET cache is missing opt$par or selectivity diagnostics.")
+}
+
+data(wcpo_bet_parameters, package = "opal")
+base_data <- base_fit$data
+if (is.null(base_data$wcpo_bet_lf) || is.null(base_data$wcpo_bet_wf)) {
+	stop("Retained BET cache is missing embedded LF/WF source data.")
+}
+
+seed_active_parameters <- function(parameters, map, opt_par) {
+	for (name in unique(names(opt_par))) {
+		if (!name %in% names(parameters)) {
+			stop("Retained active parameter is absent from bet_parameters: ", name)
+		}
+		values <- unname(opt_par[names(opt_par) == name])
+		map_value <- map[[name]]
+		if (is.null(map_value)) {
+			if (length(parameters[[name]]) != length(values)) {
+				stop("Retained active parameter has an incompatible length: ", name)
+			}
+			parameters[[name]] <- values
+			next
+		}
+		if (length(parameters[[name]]) != length(map_value)) {
+			stop("Parameter template and map have incompatible lengths: ", name)
+		}
+
+		active <- !is.na(map_value)
+		level_id <- as.integer(map_value)
+		active_levels <- sort(unique(level_id[active]))
+		if (length(values) != length(active_levels)) {
+			stop("Retained active parameter and map have incompatible lengths: ", name)
+		}
+		for (i in seq_along(active_levels)) {
+			matches <- !is.na(level_id) & level_id == active_levels[[i]]
+			parameters[[name]][matches] <- values[[i]]
+		}
+	}
+	parameters
+}
+
+retained_opt_values <- function(name) {
+	values <- unname(base_fit$opt$par[names(base_fit$opt$par) == name])
+	if (!length(values)) stop("Retained optimum is missing active parameter: ", name)
+	values
+}
+
+make_lf_wide <- function(lf) {
+	lf %>%
+		pivot_wider(id_cols = c(fishery, year, month, ts), names_from = bin,
+								values_from = value, values_fill = 0) %>%
+		arrange(fishery, ts)
+}
+
+make_wf_wide <- function(wf) {
+	wf %>%
+		pivot_wider(id_cols = c(fishery, year, month, ts), names_from = bin,
+								values_from = value, values_fill = 0) %>%
+		arrange(fishery, ts)
+}
+
+lf_wide <- make_lf_wide(base_data$wcpo_bet_lf)
+wf_wide <- make_wf_wide(base_data$wcpo_bet_wf)
+
+if (!identical(as.numeric(base_data$lf_switch), as.numeric(bet_config$lf_switch)) ||
+		!identical(as.numeric(base_data$wf_switch), as.numeric(bet_config$wf_switch)) ||
+		!identical(as.numeric(base_data$cpue_switch), as.numeric(bet_config$cpue_switch))) {
+	stop("bet_config likelihood switches do not match the retained baseline data.")
+}
+
+bet_parameters <- list(
+	log_B0 = retained_opt_values("log_B0"),
+	log_h = as.numeric(wcpo_bet_parameters$log_h),
+	log_sigma_r = as.numeric(wcpo_bet_parameters$log_sigma_r),
+	log_cpue_q = retained_opt_values("log_cpue_q"),
+	cpue_creep = rep(as.numeric(wcpo_bet_parameters$cpue_creep), base_data$n_index),
+	log_cpue_tau = rep(log(bet_config$cpue_tau), base_data$n_index),
+	log_cpue_omega = rep(as.numeric(wcpo_bet_parameters$log_cpue_omega),
+								 base_data$n_index),
+	log_lf_tau = log(rep(0.1, base_data$n_fishery)),
+	log_wf_tau = rep(0, base_data$n_fishery),
+	log_L1 = as.numeric(wcpo_bet_parameters$log_L1),
+	log_L2 = as.numeric(wcpo_bet_parameters$log_L2),
+	log_k = as.numeric(wcpo_bet_parameters$log_k),
+	log_CV1 = as.numeric(wcpo_bet_parameters$log_CV1),
+	log_CV2 = as.numeric(wcpo_bet_parameters$log_CV2),
+	par_sel = base_fit$diagnostics$selectivity_raw$par_est,
+	rdev_y = retained_opt_values("rdev_y")
+)
+
+map_sel <- base_fit$diagnostics$selectivity_raw$map_sel
+bet_map <- list(
+	log_h = factor(NA),
+	log_sigma_r = factor(NA),
+	log_cpue_q = factor(seq_len(base_data$n_index)),
+	cpue_creep = factor(rep(NA, base_data$n_index)),
+	log_cpue_tau = factor(rep(NA, base_data$n_index)),
+	log_cpue_omega = factor(rep(NA, base_data$n_index)),
+	log_lf_tau = factor(rep(NA_integer_, base_data$n_fishery)),
+	log_wf_tau = factor(rep(NA_integer_, base_data$n_fishery)),
+	log_L1 = factor(NA),
+	log_L2 = factor(NA),
+	log_k = factor(NA),
+	log_CV1 = factor(NA),
+	log_CV2 = factor(NA),
+	par_sel = factor(map_sel),
+	rdev_y = factor(base_fit$diagnostics$recruitment_raw$map_rdev)
+)
+bet_parameters <- seed_active_parameters(bet_parameters, bet_map, base_fit$opt$par)
+if (length(bet_parameters$rdev_y) != base_data$n_year ||
+		length(bet_map$rdev_y) != base_data$n_year) {
+	stop("Cached recruitment deviations or their map do not match n_year.")
+}
+obj_reference <- MakeADFun(
+	func = cmb(opal_model, base_data), parameters = bet_parameters, map = bet_map
+)
+obj_reference$env$tracemgc <- FALSE
+bet_reference_par <- base_fit$opt$par
+bounds <- base_fit$diagnostics$selectivity_raw$bounds
+if (is.null(bounds$lower) || is.null(bounds$upper) ||
+		length(bounds$lower) != length(bet_reference_par) ||
+		length(bounds$upper) != length(bet_reference_par)) {
+	stop("Retained BET cache is missing compatible optimizer bounds.")
+}
+names(bounds$lower) <- names(bet_reference_par)
+names(bounds$upper) <- names(bet_reference_par)
+
+if (!identical(names(obj_reference$par), names(bet_reference_par))) {
+	stop("Reconstructed active parameters do not match the retained BET fit. ",
+			 "Check bet_config and the selected cache.")
+}
+if (!isTRUE(all.equal(unname(obj_reference$par), unname(bet_reference_par),
+									tolerance = 0))) {
+	stop("Reconstructed bet_parameters are not seeded from the retained optimum.")
+}
+if (!is.finite(obj_reference$fn(bet_reference_par))) {
+	stop("Retained BET parameters have a non-finite objective under this configuration.")
+}
+
+cat("Model time steps (quarters):", base_data$n_year, "\n")
+cat("Peel depth:", bet_config$n_peel, "years =",
+		bet_config$n_peel * bet_config$quarters_per_year, "quarters\n")
+```
+
+# Building peels
+
+Composition structures are rebuilt from source rather than filtered in place.
+The preflight identifies all numeric fields whose first dimension equals
+`n_year`; only unhandled fields can emit a leak warning for a real peel.
+
+```{r}
+#| label: peel-helper
+#| echo: true
+#| message: false
+truncate_leading <- function(x, keep) {
+	d <- dim(x)
+	if (is.null(d)) return(x[seq_len(keep)])
+	idx <- rep(list(quote(expr = )), length(d))
+	idx[[1]] <- seq_len(keep)
+	do.call("[", c(list(x), idx, list(drop = FALSE)))
+}
+
+time_indexed_fields <- function(data) {
+	n_year <- data$n_year
+	names(Filter(function(x) {
+		is.numeric(x) && length(x) > 0L &&
+			identical(as.integer(if (is.null(dim(x))) length(x) else dim(x)[1]),
+								as.integer(n_year))
+	}, data))
+}
+
+known_time_fields <- c(
+	"years", "catch_obs_ysf", "alk_ysal", "dl_yal", "length_mu_ysa",
+	"af_sliced_ysfa", "bias_adj_y"
+)
+preflight_time_fields <- time_indexed_fields(base_data)
+message("n_year-indexed fields in the reconstructed input: ",
+				paste(preflight_time_fields, collapse = ", "))
+
+peel_bet_inputs <- function(data, parameters, map, lf_wide, wf_wide,
+														n_drop, config) {
+	stopifnot(n_drop >= 0L, n_drop < data$n_year)
+	keep <- data$n_year - n_drop
+	d <- data
+	handled <- intersect(known_time_fields, names(d))
+	for (nm in handled) d[[nm]] <- truncate_leading(d[[nm]], keep)
+
+	d$cpue_data <- dplyr::filter(data$cpue_data, ts <= keep)
+	d$n_year <- keep
+	if (!is.null(data$last_yr)) {
+		d$last_yr <- data$last_yr - n_drop / config$quarters_per_year
+	}
+
+	lf_var <- rep(config$lf_var_adjust, d$n_fishery)
+	lf_var[as.integer(names(config$lf_var_override))] <-
+		as.numeric(config$lf_var_override)
+	wf_var <- rep(config$wf_var_adjust, d$n_fishery)
+	wf_var[as.integer(names(config$wf_var_override))] <-
+		as.numeric(config$wf_var_override)
+	d <- prep_lf_data(
+		d, dplyr::filter(lf_wide, ts <= keep),
+		lf_keep_fisheries = config$lf_fisheries,
+		lf_var_adjust = lf_var, lf_switch = config$lf_switch
+	)
+	d$wt_bin_start <- 1L
+	d$wt_bin_width <- 1L
+	d$n_wt <- 200L
+	d <- prep_wf_data(
+		d, dplyr::filter(wf_wide, ts <= keep),
+		wf_keep_fisheries = config$wf_fisheries,
+		wf_var_adjust = wf_var, wf_switch = config$wf_switch
+	)
+	d$lf_switch <- config$lf_switch
+	d$wf_switch <- config$wf_switch
+	d$cpue_switch <- config$cpue_switch
+
+	if (n_drop > 0L) {
+		leaks <- setdiff(time_indexed_fields(d), handled)
+		if (length(leaks)) {
+			warning("Possible un-truncated year-indexed field(s): ",
+							paste(leaks, collapse = ", "), call. = FALSE)
+		}
+	}
+
+	p <- parameters
+	p$rdev_y <- parameters$rdev_y[seq_len(keep)]
+	m <- map
+	if (!is.null(m$rdev_y)) m$rdev_y <- droplevels(factor(m$rdev_y[seq_len(keep)]))
+
+	for (nm in handled) {
+		dx <- dim(d[[nm]])
+		if (!is.null(dx) && dx[1] != keep) stop("Failed to truncate ", nm, ".")
+	}
+	if (any(d$cpue_data$ts > keep) || length(p$rdev_y) != keep ||
+			(!is.null(m$rdev_y) && length(m$rdev_y) != keep)) {
+		stop("Peel validation failed for time-indexed data or recruitment deviations.")
+	}
+	list(data = d, parameters = p, map = m, keep = keep, n_drop = n_drop)
+}
+```
+
+## Fitting and running peels
+
+```{r}
+#| label: fit-peels
+#| echo: true
+#| message: false
+align_active_vector <- function(target, source, label) {
+	target_keys <- paste(names(target), ave(seq_along(target), names(target), FUN = seq_along))
+	source_keys <- paste(names(source), ave(seq_along(source), names(source), FUN = seq_along))
+	pos <- match(target_keys, source_keys)
+	if (anyNA(pos)) stop("Cannot align ", label, " to this peel's active parameters.")
+	unname(source[pos])
+}
+
+summarise_estimability <- function(obj, par) {
+	hessian <- tryCatch(
+		obj$he(par),
+		error = function(e) e
+	)
+	if (inherits(hessian, "error")) {
+		return(list(
+			status = "hessian_error",
+			message = conditionMessage(hessian),
+			min_eigen = NA_real_,
+			n_bad_directions = NA_integer_,
+			bad_params = tibble(Param = character(), MLE = numeric(),
+										Param_check = character())
+		))
+	}
+
+	check <- tryCatch(
+		opal::check_estimability(obj, h = hessian),
+		error = function(e) e
+	)
+	if (inherits(check, "error")) {
+		return(list(
+			status = "check_error",
+			message = conditionMessage(check),
+			min_eigen = NA_real_,
+			n_bad_directions = NA_integer_,
+			bad_params = tibble(Param = character(), MLE = numeric(),
+										Param_check = character())
+		))
+	}
+
+	bad_params <- as_tibble(check$BadParams) %>%
+		select(any_of(c("Param", "MLE", "Param_check")))
+	if (!all(c("Param", "MLE", "Param_check") %in% names(bad_params))) {
+		bad_params <- tibble(Param = character(), MLE = numeric(),
+								 Param_check = character())
+	}
+	list(
+		status = "ok",
+		message = NA_character_,
+		min_eigen = min(Re(check$Eigen$values)),
+		n_bad_directions = length(check$WhichBad),
+		bad_params = bad_params
+	)
+}
+
+fit_peel <- function(inputs, start_par, bounds, n_restart = 4L, grad_tol = 1e-2) {
+  obj <- MakeADFun(func = cmb(opal_model, inputs$data),
+                   parameters = inputs$parameters, map = inputs$map)
+  obj$env$tracemgc <- FALSE
+  par0 <- align_active_vector(obj$par, start_par, "starting values")
+  Lwr <- align_active_vector(obj$par, bounds$lower, "lower bounds")
+  Upr <- align_active_vector(obj$par, bounds$upper, "upper bounds")
+  if (length(par0) != length(Lwr) || length(par0) != length(Upr)) {
+    stop("Peel parameter and bound layouts differ.")
+  }
+  opt <- list(par = par0)
+  for (i in seq_len(n_restart)) {
+    opt <- nlminb(start = opt$par, objective = obj$fn, gradient = obj$gr,
+                  lower = Lwr, upper = Upr,
+                  control = list(eval.max = 10000, iter.max = 10000))
+    if (max(abs(obj$gr(opt$par))) < grad_tol) break
+  }
+  invisible(obj$fn(opt$par))
+  obj$env$last.par.best <- opt$par
+  grad <- as.numeric(obj$gr(opt$par))
+  kkt <- abs(grad)
+  at_l <- is.finite(Lwr) & opt$par <= Lwr + 1e-7
+  at_u <- is.finite(Upr) & opt$par >= Upr - 1e-7
+  kkt[at_l] <- pmax(0, -grad[at_l])
+  kkt[at_u] <- pmax(0, grad[at_u])
+
+  at_bound <- at_l | at_u
+
+  bound_report <- data.frame(
+    parameter   = names(obj$par)[at_bound],
+    estimate    = opt$par[at_bound],
+    bound_hit   = ifelse(at_l[at_bound], "Lower", "Upper"),
+    bound_value = ifelse(at_l[at_bound], Lwr[at_bound], Upr[at_bound]),
+    stringsAsFactors = FALSE
+  )
+
+  rep <- obj$report(opt$par)
+  par_mle <- obj$env$parList(opt$par)
+  sdr <- tryCatch(RTMB::sdreport(obj), error = function(e) NULL)
+  estimability <- summarise_estimability(obj, opt$par)
+  cpue_pred <- as.numeric(rep$cpue_pred)
+  if (length(cpue_pred) != nrow(inputs$data$cpue_data)) {
+    stop("CPUE predictions do not align with the peel CPUE observations.")
+  }
+  list(
+    n_drop = inputs$n_drop, keep = inputs$keep,
+    objective = as.numeric(opt$objective), convergence = opt$convergence,
+    max_grad = max(abs(grad)), kkt_grad = max(kkt), n_at_bound = sum(at_l | at_u),
+    par = opt$par,
+    Lwr = Lwr,
+    Upr = Upr,
+    spawning_biomass_y = as.numeric(rep$spawning_biomass_y),
+    spawning_biomass0_y = as.numeric(rep$spawning_biomass0_y),
+    static_depletion_y = as.numeric(rep$static_depletion_y),
+    dynamic_depletion_y = as.numeric(rep$dynamic_depletion_y),
+    cpue_data = inputs$data$cpue_data,
+    cpue_pred = cpue_pred,
+    par_sel = par_mle$par_sel,
+    sd_summary = if (is.null(sdr)) NULL else summary(sdr, "report"),
+    pdHess = if (is.null(sdr)) NA else sdr$pdHess,
+    estimability = estimability,
+    bound_report = bound_report
+  )
+}
+
+turn_off_bounded_parameters <- function(parameters, map, opt_par, Lwr, Upr, tol = 1e-7) {
+  at_l <- is.finite(Lwr) & opt_par <= Lwr + tol
+  at_u <- is.finite(Upr) & opt_par >= Upr - tol
+  at_bound_idx <- which(at_l | at_u)
+  
+  if (length(at_bound_idx) == 0) {
+    return(list(parameters = parameters, map = map, at_bound_idx = integer(0), report = data.frame()))
+  }
+  
+  new_parameters <- parameters
+  new_map <- map
+  report_rows <- list()
+  par_names <- names(opt_par)
+  
+  for (k in at_bound_idx) {
+    pname <- par_names[k]
+    val <- opt_par[k]
+    bound_type <- if (at_l[k]) "Lower" else "Upper"
+    bound_val  <- if (at_l[k]) Lwr[k] else Upr[k]
+    
+    instance_idx <- sum(par_names[1:k] == pname)
+    
+    if (is.null(new_map[[pname]])) {
+      new_map[[pname]] <- factor(seq_along(new_parameters[[pname]]))
+      matches <- instance_idx
+    } else {
+      m_fac <- map[[pname]]
+      level_id <- as.integer(m_fac)
+      active_levels <- sort(unique(level_id[!is.na(level_id)]))
+      target_level <- active_levels[instance_idx]
+      matches <- which(!is.na(level_id) & level_id == target_level)
+    }
+    
+    new_parameters[[pname]][matches] <- val
+    
+    m_vec <- as.character(new_map[[pname]])
+    m_vec[matches] <- NA_character_
+    new_map[[pname]] <- factor(m_vec)
+    
+    report_rows[[length(report_rows) + 1]] <- data.frame(
+      parameter = pname,
+      element_indices = paste(matches, collapse = ","),
+      estimate = val,
+      bound_hit = bound_type,
+      bound_value = bound_val,
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  for (nm in names(new_map)) {
+    if (!is.null(new_map[[nm]]) && is.factor(new_map[[nm]])) {
+      new_map[[nm]] <- droplevels(new_map[[nm]])
+    }
+  }
+  
+  list(
+    parameters = new_parameters,
+    map = new_map,
+    at_bound_idx = at_bound_idx,
+    report = do.call(rbind, report_rows)
+  )
+}
+
+cache_provenance <- list(
+  schema_version = 9L, # Increment schema version to force re-evaluation
+  reference_cache = normalizePath(base_fit_path),
+  config = bet_config,
+  start_values = "base_fit$opt$par",
+  estimability = "opal::check_estimability(obj, h = obj$he(par))"
+)
+
+cache_matches <- cache_hit("peels") && identical(retro_cache$provenance, cache_provenance)
+
+if (!cache_matches) {
+  if (cache_hit("peels")) message("Retrospective cache provenance changed; recomputing peels.")
+  
+  # --- 1. Evaluate Peel 0 (Reference Model) first ---
+  message("Pre-fitting Peel 0 (Reference Model) to evaluate parameter bounds...")
+  inp0 <- peel_bet_inputs(base_data, bet_parameters, bet_map, lf_wide, wf_wide,
+                          n_drop = 0L, config = bet_config)
+  fit0_initial <- fit_peel(inp0, start_par = bet_reference_par, bounds = bounds)
+  
+  # --- 2. Fix parameters hit on bounds in Peel 0 ---
+  fix_info <- turn_off_bounded_parameters(
+    parameters = bet_parameters,
+    map        = bet_map,
+    opt_par    = fit0_initial$par,
+    Lwr        = fit0_initial$Lwr,
+    Upr        = fit0_initial$Upr
+  )
+  
+  bet_parameters <- fix_info$parameters
+  bet_map        <- fix_info$map
+  
+  if (length(fix_info$at_bound_idx) > 0) {
+    message("Turning off ", length(fix_info$at_bound_idx), " bounded parameter(s) from Peel 0.")
+    keep_idx <- setdiff(seq_along(fit0_initial$par), fix_info$at_bound_idx)
+    
+    bet_reference_par <- fit0_initial$par[keep_idx]
+    bounds$lower      <- fit0_initial$Lwr[keep_idx]
+    bounds$upper      <- fit0_initial$Upr[keep_idx]
+    names(bounds$lower) <- names(bet_reference_par)
+    names(bounds$upper) <- names(bet_reference_par)
+  }
+  
+  # --- 3. Fit all retrospective peels with updated active map ---
+  peel_depths <- (0:bet_config$n_peel) * bet_config$quarters_per_year
+  peels <- purrr::map(peel_depths, function(n_drop) {
+    message("Peel with ", n_drop / bet_config$quarters_per_year, " calendar years removed")
+    inp <- peel_bet_inputs(base_data, bet_parameters, bet_map, lf_wide, wf_wide,
+                           n_drop = n_drop, config = bet_config)
+    fit_peel(inp, start_par = bet_reference_par, bounds = bounds)
+  })
+  names(peels) <- paste0("peel_", 0:bet_config$n_peel)
+  
+  retro_cache$peels <- peels
+  retro_cache$provenance <- cache_provenance
+  saveRDS(retro_cache, cache_file)
+}
+peels <- retro_cache$peels
+```
+
+```{r}
+#| label: tbl-peel-convergence
+#| echo: true
+#| tbl-cap: Convergence and estimability diagnostics by retrospective peel. Estimability is evaluated only for active parameters and should be interpreted with the KKT gradient and Hessian status.
+purrr::map_dfr(peels, function(p) {
+	est <- p$estimability
+	bad_names <- if (identical(est$status, "ok")) {
+		bad <- est$bad_params %>% filter(Param_check == "Bad") %>% pull(Param)
+		if (length(bad)) paste(unique(bad), collapse = ", ") else "None"
+	} else {
+		NA_character_
+	}
+	tibble(peel = p$n_drop / bet_config$quarters_per_year,
+				 time_steps = p$keep, objective = p$objective,
+				 max_grad = p$max_grad, kkt_grad = p$kkt_grad,
+				 n_at_bound = p$n_at_bound, pdHess = p$pdHess,
+				 estimability = est$status,
+				 min_eigen = est$min_eigen,
+				 n_bad_directions = est$n_bad_directions,
+				 bad_parameters = bad_names,
+				 estimability_message = est$message)
+}) %>%
+	mutate(retained = kkt_grad < 1e-2 & (is.na(pdHess) | pdHess),
+				 across(c(objective, max_grad, kkt_grad, min_eigen), ~ signif(.x, 4))) %>%
+	knitr::kable()
+```
+
+`check_estimability()` examines the Hessian only for parameters active in the
+peel's RTMB objective. A `Bad` result therefore identifies an active parameter
+that contributes materially to a near-null Hessian direction; it is not a
+convergence verdict. Read it alongside the KKT gradient, `pdHess`, and any
+estimability diagnostic error shown in the table.
+
+# Peel time series
+
+The plot below overlays all peels within each metric facet. Pointwise Wald 95%
+intervals come from `sdreport()` and use the same colour as their peel. Intervals
+are clipped to the feasible scale: zero for spawning biomass and $[0, 1]$ for
+depletion. A peel without a usable `sdreport()` result retains its estimate but
+has no uncertainty ribbon.
+
+```{r}
+#| label: prepare-peel-time-series
+#| echo: true
+report_series <- function(peel_fit, peel_label, quantity, metric) {
+	n <- length(peel_fit[[quantity]])
+	se <- rep(NA_real_, n)
+	if (!is.null(peel_fit$sd_summary) && "Std. Error" %in% colnames(peel_fit$sd_summary)) {
+		rows <- which(rownames(peel_fit$sd_summary) == quantity)
+		if (length(rows)) {
+			se[seq_len(min(n, length(rows)))] <-
+				peel_fit$sd_summary[rows[seq_len(min(n, length(rows)))], "Std. Error"]
+		}
+	}
+	tibble(
+		peel = peel_label,
+		calendar_year = as.numeric(base_data$years[seq_len(n)]),
+		metric = metric,
+		estimate = as.numeric(peel_fit[[quantity]]),
+		se = as.numeric(se)
+	)
+}
+
+peel_labels <- paste0("Peel ", purrr::map_int(peels, "n_drop") / bet_config$quarters_per_year)
+peel_time_series <- purrr::imap_dfr(peels, function(peel_fit, peel_name) {
+	peel_label <- paste0("Peel ", peel_fit$n_drop / bet_config$quarters_per_year)
+	bind_rows(
+		report_series(peel_fit, peel_label, "spawning_biomass_y", "Spawning biomass"),
+		report_series(peel_fit, peel_label, "static_depletion_y", "Static depletion"),
+		report_series(peel_fit, peel_label, "dynamic_depletion_y", "Dynamic depletion")
+	)
+}) %>%
+	mutate(
+		peel = factor(peel, levels = peel_labels),
+		lower = estimate - qnorm(0.975) * se,
+		upper = estimate + qnorm(0.975) * se,
+		lower = pmax(0, lower),
+		upper = if_else(metric == "Spawning biomass", upper, pmin(1, upper))
+	)
+```
+
+```{r}
+#| label: fig-peel-time-series
+#| fig-cap: Retrospective time series by metric. Colour identifies the number of calendar years removed; ribbons are pointwise 95% uncertainty intervals.
+#| fig-width: 12
+#| fig-height: 10
+peel_time_series %>%
+	ggplot(aes(calendar_year, estimate, group = peel)) +
+	geom_ribbon(aes(ymin = lower, ymax = upper, fill = peel), alpha = 0.25, na.rm = TRUE) +
+	geom_line(linewidth = 1.15, aes(colour = peel)) +
+	facet_wrap(~ metric, scales = "free_y", ncol = 1) +
+	scale_colour_viridis_d(option = "turbo", end = 0.9) +
+	scale_fill_viridis_d(option = "turbo", end = 0.9) +
+	labs(x = "Calendar year", y = NULL, colour = "Peel (years removed)", fill = "Peel (years removed)") +
+	guides(fill = "none") +
+	theme(legend.position = "bottom")
+```
+
+# Index fit by peel
+
+The index-fit plot uses the log-scale RMSE, $
+\sqrt{\operatorname{mean}[(\log I_\mathrm{obs} - \log I_\mathrm{pred})^2]}$,
+calculated separately for each retained index observation in a peel.
+
+```{r}
+#| label: prepare-peel-index-fit
+#| echo: true
+peel_cpue_fit <- purrr::imap_dfr(peels, function(peel_fit, peel_name) {
+	# CPUE predictions follow the baseline rows retained by this peel exactly.
+	cpue <- base_data$cpue_data %>% filter(ts <= peel_fit$keep)
+	if (!all(c("year", "month", "value") %in% names(cpue))) {
+		stop("Baseline CPUE data are missing year, month, or value.")
+	}
+	if (is.null(peel_fit$cpue_pred)) {
+		stop("Cached peel lacks CPUE predictions; rerun the fit-peels chunk to refresh the cache.")
+	}
+	if (nrow(cpue) != length(peel_fit$cpue_pred)) {
+		stop("Baseline CPUE rows and cached peel predictions have incompatible lengths.")
+	}
+	cpue %>%
+		transmute(
+			peel = paste0("Peel ", peel_fit$n_drop / bet_config$quarters_per_year),
+			calendar_year = as.numeric(year) + (as.numeric(month) - 1) / 12,
+			index = factor(month, levels = sort(unique(base_data$cpue_data$month)),
+				labels = month.abb[sort(unique(base_data$cpue_data$month))]),
+			observed = as.numeric(value),
+			predicted = as.numeric(peel_fit$cpue_pred)
+		)
+}) %>%
+	mutate(peel = factor(peel, levels = peel_labels))
+
+cpue_observed <- peel_cpue_fit %>%
+	select(index, calendar_year, observed) %>%
+	distinct()
+cpue_rmse <- peel_cpue_fit %>%
+	filter(observed > 0, predicted > 0) %>%
+	group_by(index, peel) %>%
+	summarise(rmse = sqrt(mean((log(observed) - log(predicted))^2)), .groups = "drop") %>%
+	group_by(index) %>%
+	arrange(peel, .by_group = TRUE) %>%
+	mutate(label_rank = row_number(), label = paste0(as.character(peel), ": ", sprintf("%.3f", rmse))) %>%
+	ungroup()
+```
+
+```{r}
+#| label: fig-peel-index-fit
+#| fig-cap: Observed and predicted CPUE by index and retrospective peel. Labels give the log-scale RMSE for each peel within an index.
+#| fig-width: 12
+#| fig-height: 7
+ggplot(peel_cpue_fit, aes(calendar_year, predicted, colour = peel, group = peel)) +
+	geom_point(data = cpue_observed, aes(y = observed), inherit.aes = FALSE,
+				 colour = "grey15", size = 1.1, alpha = 0.7) +
+	geom_line(linewidth = 0.7) +
+	geom_text(data = cpue_rmse, aes(x = Inf, y = Inf, label = label, colour = peel,
+											group = peel, vjust = 1.1 + 1.15 * label_rank),
+				 hjust = 1.05, size = 2.8, show.legend = FALSE) +
+	facet_wrap(~ index, scales = "free_y") +
+	scale_y_log10() +
+	scale_colour_viridis_d(option = "turbo", end = 0.9) +
+	labs(x = "Calendar year", y = "Standardized CPUE", colour = "Peel (years removed)") +
+	theme(legend.position = "bottom")
+```
+
+# Selectivity by peel
+
+```{r}
+#| label: prepare-peel-selectivity
+#| echo: true
+sel_logistic <- function(len, par) {
+	mean_length <- mean(len)
+	sd_length <- sd(len)
+	a50 <- mean_length + par[1] * sd_length
+	w95 <- exp(par[2]) * sd_length
+	1 / (1 + exp(-log(19) * (len - a50) / w95))
+}
+
+sel_double_normal <- function(len, par) {
+	mean_length <- mean(len)
+	sd_length <- sd(len)
+	peak <- mean_length + par[1] * sd_length
+	upper_scale <- exp(par[3]) * sd_length^2
+	lower_scale <- exp(par[4]) * sd_length^2
+	upper_point <- plogis(par[5])
+	lower_point <- plogis(par[6])
+	last <- length(len)
+	bin_width <- len[2] - len[1]
+	second_peak <- peak + bin_width + (0.99 * len[last] - peak - bin_width) /
+		(1 + exp(-par[2]))
+	upper_min <- exp(-(len[1] - peak)^2 / upper_scale)
+	lower_min <- exp(-(len[last] - second_peak)^2 / lower_scale)
+	upper_distance <- len - peak
+	lower_distance <- len - second_peak
+	join_upper <- plogis((20 / (1 + abs(upper_distance))) * upper_distance)
+	join_lower <- plogis((20 / (1 + abs(lower_distance))) * lower_distance)
+	ascending <- upper_point + (1 - upper_point) *
+		(exp(-upper_distance^2 / upper_scale) - upper_min) / (1 - upper_min)
+	descending <- 1 + (lower_point - 1) *
+		(exp(-lower_distance^2 / lower_scale) - 1) / (lower_min - 1)
+	ascending * (1 - join_upper) + join_upper * (1 - join_lower + descending * join_lower)
+}
+
+sel_type_f <- base_fit$diagnostics$selectivity_raw$sel_type_f
+if (is.null(sel_type_f)) sel_type_f <- base_data$sel_type_f
+if (is.null(sel_type_f)) stop("Selectivity types are unavailable in the retained fit cache.")
+
+peel_selectivity <- purrr::imap_dfr(peels, function(peel_fit, peel_name) {
+	par_sel <- peel_fit$par_sel
+	if (is.null(dim(par_sel))) stop("Cached peel selectivity parameters are not a matrix.")
+	if (nrow(par_sel) != length(sel_type_f)) {
+		stop("Cached peel selectivity parameters and selectivity types are incompatible.")
+	}
+	purrr::map_dfr(seq_len(nrow(par_sel)), function(fishery) {
+		selectivity <- if (sel_type_f[[fishery]] == 1L) {
+			sel_logistic(base_data$len_mid, par_sel[fishery, ])
+		} else {
+			sel_double_normal(base_data$len_mid, par_sel[fishery, ])
+		}
+		tibble(
+			peel = paste0("Peel ", peel_fit$n_drop / bet_config$quarters_per_year),
+			fishery = paste("Fishery", fishery),
+			length = base_data$len_mid,
+			selectivity = pmin(1, pmax(0, as.numeric(selectivity)))
+		)
+	})
+}) %>%
+	mutate(
+		peel = factor(peel, levels = peel_labels),
+		fishery = factor(fishery, levels = paste("Fishery", seq_along(sel_type_f)))
+	)
+```
+
+```{r}
+#| label: fig-peel-selectivity
+#| fig-cap: Estimated selectivity-at-length curves for each retrospective peel. Colours identify the number of calendar years removed.
+#| fig-width: 12
+#| fig-height: 14
+ggplot(peel_selectivity, aes(length, selectivity, colour = peel, group = peel)) +
+	geom_line(linewidth = 0.65) +
+	facet_wrap(~ fishery, ncol = 3) +
+	coord_cartesian(ylim = c(0, 1)) +
+	scale_colour_viridis_d(option = "turbo", end = 0.9) +
+	labs(x = "Length", y = "Selectivity", colour = "Peel (years removed)") +
+	theme(legend.position = "bottom")
+```
+
+# Mohn's rho
+
+```{r}
+#| label: mohn-rho
+#| echo: true
+qpy <- bet_config$quarters_per_year
+mohn_rho <- function(peels, quantity, unit = c("quarter", "year"), drop_last = 0L) {
+	unit <- match.arg(unit)
+	full <- peels[[1]][[quantity]]
+	use <- peels[-1]
+	if (drop_last > 0L) use <- use[seq_len(length(use) - drop_last)]
+	terms <- purrr::map_dfr(use, function(p) {
+		idx <- if (unit == "quarter") p$keep else seq(p$keep - qpy + 1L, p$keep)
+		x_peel <- mean(p[[quantity]][idx])
+		x_full <- mean(full[idx])
+		tibble(peel = p$n_drop / qpy, x_peel = x_peel, x_full = x_full,
+					 rel_diff = (x_peel - x_full) / x_full)
+	})
+	list(rho = mean(terms$rel_diff), terms = terms)
+}
+
+quantities <- c("spawning_biomass_y", "dynamic_depletion_y", "static_depletion_y")
+rho_table <- tidyr::expand_grid(quantity = quantities,
+																unit = c("quarter", "year"),
+																drop_last = c(0L, 1L)) %>%
+	mutate(res = purrr::pmap(list(quantity, unit, drop_last),
+													 ~ mohn_rho(peels, ..1, ..2, ..3)),
+				 rho = purrr::map_dbl(res, "rho"),
+				 min_diff = purrr::map_dbl(res, ~ min(.x$terms$rel_diff)),
+				 max_diff = purrr::map_dbl(res, ~ max(.x$terms$rel_diff))) %>%
+	select(-res)
+
+rho_table %>%
+	mutate(unit = recode(unit, quarter = "Terminal quarter", year = "Terminal-year mean"),
+				 peels_used = if_else(drop_last == 0L, "all", "final peel dropped"),
+				 across(c(rho, min_diff, max_diff), ~ round(.x, 3)),
+				 outside_rule = rho < -0.15 | rho > 0.20) %>%
+	select(quantity, unit, peels_used, rho, min_diff, max_diff, outside_rule) %>%
+	knitr::kable()
+```
+
+# Interpretation
+
+A retrospective pattern indicates that post-sample data update an estimate in
+a way that is inconsistent with the fitted model conditioned on earlier data.
+It does not identify the direction or magnitude of estimation error, and does
+not justify adjusting $\rho$.
+
+The post-sample bootstrap significance test is intentionally not executed here.
+Each replicate requires all retrospective refits and should be run separately
+after the deterministic peel series has been reviewed.
