@@ -56,7 +56,6 @@ cache_dir <- file.path(repo_dir, "assets", "cached", "bet", "retro")
 cache_file <- file.path(cache_dir, "bet_retro.rds")
 dir.create(cache_dir, showWarnings = FALSE, recursive = TRUE)
 retro_cache <- if (file.exists(cache_file)) readRDS(cache_file) else list()
-cache_hit <- function(key) !is.null(retro_cache[[key]])
 ```
 
 ::: {.callout-note}
@@ -82,8 +81,9 @@ bet_config <- list(
 	wf_switch = 1L,
 	cpue_switch = 1L,
 	cpue_tau = 1e-8,
-	n_peel = 1L,
-	quarters_per_year = 4L
+	n_peel = 6L,
+	quarters_per_year = 4L,
+	fix_bounded_at = "estimate"
 )
 ```
 
@@ -209,6 +209,7 @@ bet_map <- list(
 	par_sel = factor(map_sel),
 	rdev_y = factor(base_fit$diagnostics$recruitment_raw$map_rdev)
 )
+bet_parameters_template <- bet_parameters
 bet_parameters <- seed_active_parameters(bet_parameters, bet_map, base_fit$opt$par)
 if (length(bet_parameters$rdev_y) != base_data$n_year ||
 		length(bet_map$rdev_y) != base_data$n_year) {
@@ -342,251 +343,556 @@ peel_bet_inputs <- function(data, parameters, map, lf_wide, wf_wide,
 }
 ```
 
+## Aligning parameters across layouts
+
+Peels and the bound-fixing step both change the *active* parameter layout: a peel
+shortens `rdev_y`, and fixing a bounded parameter removes it. Matching starting
+values or bounds by position within a parameter name is only valid when the two
+layouts are identical, so both operations are keyed instead to the element of the
+parameter template that each active slot controls (`par_sel[17]`, `rdev_y[233]`).
+Those keys are stable under both operations.
+
+The correspondence between an active slot and the template element it controls is
+*derived* from RTMB rather than assumed. `parList()` expands a reduced vector back
+into the full parameter list, so expanding a probe vector `1, 2, ..., n` reveals
+which elements each slot drives: the element holding the value `k` is controlled by
+slot `k`. A second expansion of an all-zero vector separates active elements from
+fixed ones, whose values do not respond to the probe.
+
+This removes any dependence on how TMB collapses a mapped parameter, which is not
+reliably first-appearance order and which an earlier version of this chunk got
+wrong.
+
+```{r}
+#| label: par-keys
+#| echo: true
+#| message: false
+key_parameter <- function(keys) sub("\\[[0-9]+\\]$", "", keys)
+key_element <- function(keys) as.integer(sub("^.*\\[([0-9]+)\\]$", "\\1", keys))
+
+# parList()'s signature has varied across TMB versions. Use whichever call form
+# actually responds to the supplied vector.
+expand_probe <- function(obj, values) {
+	forms <- list(
+		function(v) obj$env$parList(v),
+		function(v) obj$env$parList(par = v),
+		function(v) obj$env$parList(x = v, par = v)
+	)
+	for (form in forms) {
+		base <- tryCatch(form(rep(0, length(values))), error = function(e) NULL)
+		probe <- tryCatch(form(values), error = function(e) NULL)
+		if (is.null(base) || is.null(probe)) next
+		if (!identical(unlist(base), unlist(probe))) {
+			return(list(base = base, probe = probe))
+		}
+	}
+	stop("obj$env$parList() did not respond to the probe vector, so the active ",
+			 "parameter layout cannot be derived.")
+}
+
+# Map each active slot to the template element it controls, e.g. "par_sel[17]".
+# Where several elements share a slot, the lowest element index becomes the key.
+active_par_keys <- function(obj) {
+	if (length(obj$env$random)) {
+		stop("Key derivation assumes a fixed-effects model; obj has random effects.")
+	}
+	n <- length(obj$par)
+	expanded <- expand_probe(obj, as.numeric(seq_len(n)))
+	keys <- rep(NA_character_, n)
+	for (nm in names(expanded$probe)) {
+		base <- as.numeric(expanded$base[[nm]])
+		probe <- as.numeric(expanded$probe[[nm]])
+		if (!length(probe)) next
+		# Fixed elements hold their template value under both probes.
+		for (el in which(base == 0 & probe != 0)) {
+			slot <- round(probe[[el]])
+			if (abs(probe[[el]] - slot) > 1e-8 || slot < 1 || slot > n) next
+			slot <- as.integer(slot)
+			if (is.na(keys[[slot]])) keys[[slot]] <- sprintf("%s[%d]", nm, el)
+		}
+	}
+	if (anyNA(keys)) {
+		stop("Could not identify template elements for ", sum(is.na(keys)), " of ",
+				 n, " active parameters.")
+	}
+	if (!identical(key_parameter(keys), names(obj$par))) {
+		stop("Derived keys do not match names(obj$par); the parList() expansion is ",
+				 "not consistent with the active parameter names.")
+	}
+	keys
+}
+
+align_by_key <- function(keys, keyed_values, label) {
+	pos <- match(keys, names(keyed_values))
+	if (anyNA(pos)) {
+		stop("Cannot align ", label, " for: ",
+				 paste(keys[is.na(pos)], collapse = ", "))
+	}
+	stats::setNames(as.numeric(keyed_values[pos]), keys)
+}
+```
+
+```{r}
+#| label: reference-keys
+#| echo: true
+#| message: false
+reference_keys <- active_par_keys(obj_reference)
+
+# Master keyed stores. Every later layout is a subset of these keys.
+keyed_start <- stats::setNames(as.numeric(bet_reference_par), reference_keys)
+keyed_lower <- stats::setNames(as.numeric(bounds$lower), reference_keys)
+keyed_upper <- stats::setNames(as.numeric(bounds$upper), reference_keys)
+
+stopifnot(length(reference_keys) == length(bet_reference_par),
+					!anyDuplicated(reference_keys))
+```
+
+```{r}
+#| label: tbl-key-derivation
+#| echo: true
+#| tbl-cap: Derived active parameter layout. `slots` counts the active parameters contributed by each entry of the parameter list; the first and last keys show the template elements at either end of that block.
+tibble(key = reference_keys, slot = seq_along(reference_keys)) %>%
+	mutate(parameter = key_parameter(key)) %>%
+	group_by(parameter) %>%
+	summarise(slots = n(), first_slot = min(slot), last_slot = max(slot),
+						first_key = key[which.min(slot)], last_key = key[which.max(slot)],
+						.groups = "drop") %>%
+	arrange(first_slot) %>%
+	knitr::kable()
+```
+
 ## Fitting and running peels
+
+```{r}
+#| label: peel-fitting-functions
+#| echo: true
+#| message: false
+summarise_estimability <- function(obj, par) {
+	hessian <- tryCatch(obj$he(par), error = function(e) e)
+	empty <- tibble(Param = character(), MLE = numeric(), Param_check = character())
+	if (inherits(hessian, "error")) {
+		return(list(status = "hessian_error", message = conditionMessage(hessian),
+								min_eigen = NA_real_, n_bad_directions = NA_integer_,
+								bad_params = empty))
+	}
+	check <- tryCatch(opal::check_estimability(obj, h = hessian),
+										error = function(e) e)
+	if (inherits(check, "error")) {
+		return(list(status = "check_error", message = conditionMessage(check),
+								min_eigen = NA_real_, n_bad_directions = NA_integer_,
+								bad_params = empty))
+	}
+	bad_params <- as_tibble(check$BadParams) %>%
+		select(any_of(c("Param", "MLE", "Param_check")))
+	if (!all(c("Param", "MLE", "Param_check") %in% names(bad_params))) {
+		bad_params <- empty
+	}
+	list(status = "ok", message = NA_character_,
+			 min_eigen = min(Re(check$Eigen$values)),
+			 n_bad_directions = length(check$WhichBad),
+			 bad_params = bad_params)
+}
+
+bounded_parameters <- function(keys, par, lower, upper, tol = 1e-7) {
+	at_lower <- is.finite(lower) & par <= lower + tol
+	at_upper <- is.finite(upper) & par >= upper - tol
+	hit <- which(at_lower | at_upper)
+	tibble(
+		key = keys[hit],
+		parameter = key_parameter(keys[hit]),
+		element = key_element(keys[hit]),
+		estimate = as.numeric(par[hit]),
+		bound = if_else(at_lower[hit], "lower", "upper"),
+		bound_value = if_else(at_lower[hit], as.numeric(lower[hit]),
+													as.numeric(upper[hit]))
+	)
+}
+
+fit_peel <- function(inputs, keyed_start, keyed_lower, keyed_upper,
+										 n_restart = 4L, grad_tol = 1e-2) {
+	obj <- MakeADFun(func = cmb(opal_model, inputs$data),
+									 parameters = inputs$parameters, map = inputs$map)
+	obj$env$tracemgc <- FALSE
+	keys <- active_par_keys(obj)
+
+	par0 <- align_by_key(keys, keyed_start, "starting values")
+	lower <- align_by_key(keys, keyed_lower, "lower bounds")
+	upper <- align_by_key(keys, keyed_upper, "upper bounds")
+
+	opt <- list(par = unname(par0))
+	for (i in seq_len(n_restart)) {
+		opt <- nlminb(start = opt$par, objective = obj$fn, gradient = obj$gr,
+									lower = unname(lower), upper = unname(upper),
+									control = list(eval.max = 10000, iter.max = 10000))
+		if (max(abs(obj$gr(opt$par))) < grad_tol) break
+	}
+	invisible(obj$fn(opt$par))
+	obj$env$last.par.best <- opt$par
+
+	grad <- as.numeric(obj$gr(opt$par))
+	at_lower <- is.finite(lower) & opt$par <= lower + 1e-7
+	at_upper <- is.finite(upper) & opt$par >= upper - 1e-7
+	kkt <- abs(grad)
+	kkt[at_lower] <- pmax(0, -grad[at_lower])
+	kkt[at_upper] <- pmax(0, grad[at_upper])
+
+	rep <- obj$report(opt$par)
+	par_mle <- obj$env$parList(opt$par)
+	sdr <- tryCatch(RTMB::sdreport(obj), error = function(e) NULL)
+	cpue_pred <- as.numeric(rep$cpue_pred)
+	if (length(cpue_pred) != nrow(inputs$data$cpue_data)) {
+		stop("CPUE predictions do not align with the peel CPUE observations.")
+	}
+
+	list(
+		n_drop = inputs$n_drop, keep = inputs$keep,
+		objective = as.numeric(opt$objective), convergence = opt$convergence,
+		max_grad = max(abs(grad)), kkt_grad = max(kkt),
+		n_at_bound = sum(at_lower | at_upper),
+		keys = keys,
+		par = stats::setNames(as.numeric(opt$par), keys),
+		bound_report = bounded_parameters(keys, opt$par, lower, upper),
+		spawning_biomass_y = as.numeric(rep$spawning_biomass_y),
+		spawning_biomass0_y = as.numeric(rep$spawning_biomass0_y),
+		static_depletion_y = as.numeric(rep$static_depletion_y),
+		dynamic_depletion_y = as.numeric(rep$dynamic_depletion_y),
+		cpue_data = inputs$data$cpue_data,
+		cpue_pred = cpue_pred,
+		par_sel = par_mle$par_sel,
+		sd_summary = if (is.null(sdr)) NULL else summary(sdr, "report"),
+		pdHess = if (is.null(sdr)) NA else sdr$pdHess,
+		estimability = summarise_estimability(obj, opt$par)
+	)
+}
+```
+
+### Fixing parameters estimated on a bound
+
+A parameter resting on a bound contributes no curvature and inflates the
+`sdreport()` covariance for everything correlated with it. `fix_bounded_parameters()`
+removes each such slot from estimation by setting the corresponding map entries to
+`NA`, holding the parameter either at its estimated (bound) value or at its value
+in the pre-seeded template.
+
+Because the map is edited through the element keys rather than through positions
+in the active vector, repeated hits within one parameter (several `par_sel`
+coefficients, say) are handled correctly, and the keys of the surviving slots are
+unchanged.
+
+```{r}
+#| label: fix-bounded
+#| echo: true
+#| message: false
+fix_bounded_parameters <- function(parameters, map, bound_report,
+																	 fix_at = c("estimate", "initial"),
+																	 template = NULL) {
+	fix_at <- match.arg(fix_at)
+	if (identical(fix_at, "initial") && is.null(template)) {
+		stop("fix_at = 'initial' requires a parameter template.")
+	}
+	if (!nrow(bound_report)) {
+		return(list(parameters = parameters, map = map,
+								fixed_keys = character(0), report = bound_report))
+	}
+
+	new_parameters <- parameters
+	new_map <- map
+	fixed_at <- numeric(nrow(bound_report))
+	elements <- character(nrow(bound_report))
+
+	for (j in seq_len(nrow(bound_report))) {
+		nm <- bound_report$parameter[[j]]
+		lead <- bound_report$element[[j]]
+		if (is.null(new_map[[nm]])) {
+			new_map[[nm]] <- factor(seq_along(new_parameters[[nm]]))
+		}
+		m <- new_map[[nm]]
+		if (is.na(m[[lead]])) {
+			stop("Element ", lead, " of ", nm, " is already fixed; duplicate key?")
+		}
+		elems <- which(!is.na(m) & m == m[[lead]])
+		value <- if (identical(fix_at, "estimate")) {
+			bound_report$estimate[[j]]
+		} else {
+			as.numeric(template[[nm]][[lead]])
+		}
+		new_parameters[[nm]][elems] <- value
+
+		labels <- as.character(m)
+		labels[elems] <- NA_character_
+		# Preserve first-appearance level order so the active layout is unchanged.
+		new_map[[nm]] <- factor(labels, levels = unique(labels[!is.na(labels)]))
+
+		fixed_at[[j]] <- value
+		elements[[j]] <- paste(elems, collapse = ",")
+	}
+
+	list(parameters = new_parameters, map = new_map,
+			 fixed_keys = bound_report$key,
+			 report = bound_report %>%
+				 mutate(mapped_elements = elements, fixed_at = fixed_at))
+}
+```
+
+### Convergence reporting
+
+Two gradient summaries are reported for every model. `max_grad` is the raw
+maximum absolute gradient, and `kkt_grad` is the Karush--Kuhn--Tucker adjusted
+maximum: at a parameter resting on a bound, only the component pointing back into
+the feasible region counts. A large `max_grad` with a small `kkt_grad` is the
+signature of an active bound rather than a failure to converge, which is why both
+are needed. Once bounded parameters have been fixed the two should agree.
+
+```{r}
+#| label: convergence-row
+#| echo: true
+convergence_row <- function(fit, label) {
+	tibble(
+		model = label,
+		time_steps = fit$keep,
+		active_parameters = length(fit$keys),
+		objective = fit$objective,
+		nlminb_convergence = fit$convergence,
+		max_grad = fit$max_grad,
+		kkt_grad = fit$kkt_grad,
+		n_at_bound = fit$n_at_bound,
+		pdHess = fit$pdHess
+	)
+}
+
+bound_table <- function(fit, label) {
+	if (!nrow(fit$bound_report)) {
+		return(tibble(model = label, key = "None", parameter = NA_character_,
+									bound = NA_character_, bound_value = NA_real_,
+									estimate = NA_real_))
+	}
+	fit$bound_report %>%
+		transmute(model = label, key, parameter, bound, bound_value, estimate)
+}
+```
+
+### Cache provenance
+
+Both baseline fits and the peel series share one cache file, but each entry
+carries its own provenance record. Changing `n_peel` therefore reruns only the
+peel series; changing `fix_bounded_at` reruns the refitted baseline and the peel
+series but not the original baseline.
+
+```{r}
+#| label: cache-provenance
+#| echo: true
+# Provenance is recorded per cache entry and chained, so that changing the peel
+# depth does not invalidate the two baseline fits.
+provenance_baseline <- list(
+	schema_version = 12L,
+	reference_cache = normalizePath(base_fit_path),
+	fit_config = bet_config[c("lf_fisheries", "wf_fisheries", "lf_var_adjust",
+															"lf_var_override", "wf_var_adjust", "wf_var_override",
+															"lf_switch", "wf_switch", "cpue_switch", "cpue_tau",
+															"quarters_per_year")],
+	start_values = "base_fit$opt$par, keyed by parameter element",
+	estimability = "opal::check_estimability(obj, h = obj$he(par))"
+)
+provenance_fixed <- c(provenance_baseline, list(
+	fix_bounded_at = bet_config$fix_bounded_at,
+	fix_policy = "single pass, determined from the original baseline"
+))
+provenance_peels <- c(provenance_fixed, list(n_peel = bet_config$n_peel))
+
+# Snapshot the stored provenance before any chunk writes to the cache.
+stored_provenance <- retro_cache$provenance
+if (is.null(stored_provenance)) stored_provenance <- list()
+
+needs_fit <- function(key, provenance, companions = character(0)) {
+	if (!identical(stored_provenance[[key]], provenance)) return(TRUE)
+	if (is.null(retro_cache[[key]])) return(TRUE)
+	any(vapply(companions, function(nm) is.null(retro_cache[[nm]]), logical(1)))
+}
+
+# Records the entry's provenance and flushes the shared cache file.
+write_cache <- function(key, provenance) {
+	retro_cache$provenance[[key]] <<- provenance
+	saveRDS(retro_cache, cache_file)
+}
+```
+
+### Original baseline
+
+The reconstructed retained fit, refitted here under the peel machinery with no
+parameters fixed beyond those already mapped off in the retained configuration.
+This is the model whose bound behaviour determines what is fixed in the next
+step.
+
+```{r}
+#| label: fit-baseline-initial
+#| echo: true
+#| message: false
+if (needs_fit("baseline_initial", provenance_baseline)) {
+	message("Fitting the original baseline.")
+	inputs_initial <- peel_bet_inputs(base_data, bet_parameters, bet_map,
+																		lf_wide, wf_wide, n_drop = 0L,
+																		config = bet_config)
+	retro_cache$baseline_initial <- fit_peel(inputs_initial, keyed_start,
+																					 keyed_lower, keyed_upper)
+	write_cache("baseline_initial", provenance_baseline)
+}
+baseline_initial <- retro_cache$baseline_initial
+```
+
+```{r}
+#| label: tbl-baseline-initial
+#| echo: true
+#| tbl-cap: Convergence diagnostics for the original baseline fit. Both the raw and KKT-adjusted maximum gradients are shown.
+convergence_row(baseline_initial, "Original baseline") %>%
+	mutate(across(c(objective, max_grad, kkt_grad), ~ signif(.x, 6))) %>%
+	knitr::kable()
+```
+
+```{r}
+#| label: tbl-baseline-initial-bounds
+#| echo: true
+#| tbl-cap: Parameters estimated on a bound in the original baseline fit.
+bound_table(baseline_initial, "Original baseline") %>%
+	mutate(across(c(bound_value, estimate), ~ signif(.x, 5))) %>%
+	knitr::kable()
+```
+
+### Refitted baseline
+
+Every parameter listed above is removed from estimation by setting its map entry
+to `NA` and holding it at `bet_config$fix_bounded_at`. The model is then refitted.
+Fixing at the estimated value pins the parameter to the bound it was already
+resting on, so the objective should be unchanged to within optimiser tolerance and
+`max_grad` should fall to meet `kkt_grad`.
+
+```{r}
+#| label: fit-baseline-fixed
+#| echo: true
+#| message: false
+fixed_companions <- c("baseline_parameters", "baseline_map",
+													"baseline_keyed_start", "baseline_fix_report")
+if (needs_fit("baseline_fixed", provenance_fixed, fixed_companions)) {
+	message("Fixing bounded parameters and refitting the baseline.")
+	fix_info <- fix_bounded_parameters(
+		parameters = bet_parameters, map = bet_map,
+		bound_report = baseline_initial$bound_report,
+		fix_at = bet_config$fix_bounded_at,
+		template = bet_parameters_template
+	)
+
+	# Fitted values from the original baseline seed the refit.
+	baseline_keyed_start <- keyed_start
+	baseline_keyed_start[names(baseline_initial$par)] <- baseline_initial$par
+
+	inputs_fixed <- peel_bet_inputs(base_data, fix_info$parameters, fix_info$map,
+																	lf_wide, wf_wide, n_drop = 0L,
+																	config = bet_config)
+	retro_cache$baseline_fixed <- fit_peel(inputs_fixed, baseline_keyed_start,
+																				 keyed_lower, keyed_upper)
+	retro_cache$baseline_parameters <- fix_info$parameters
+	retro_cache$baseline_map <- fix_info$map
+	retro_cache$baseline_keyed_start <- baseline_keyed_start
+	retro_cache$baseline_fix_report <- fix_info$report
+	write_cache("baseline_fixed", provenance_fixed)
+}
+baseline_fixed <- retro_cache$baseline_fixed
+baseline_parameters <- retro_cache$baseline_parameters
+baseline_map <- retro_cache$baseline_map
+baseline_keyed_start <- retro_cache$baseline_keyed_start
+baseline_fix_report <- retro_cache$baseline_fix_report
+```
+
+```{r}
+#| label: tbl-baseline-fixed
+#| echo: true
+#| tbl-cap: Convergence diagnostics for the original and refitted baselines. A drop in active parameters with an unchanged objective is the expected result of fixing parameters at their bound values.
+bind_rows(
+	convergence_row(baseline_initial, "Original baseline"),
+	convergence_row(baseline_fixed, "Refitted baseline")
+) %>%
+	mutate(across(c(objective, max_grad, kkt_grad), ~ signif(.x, 6))) %>%
+	knitr::kable()
+```
+
+```{r}
+#| label: tbl-baseline-fix-report
+#| echo: true
+#| tbl-cap: Parameters removed from estimation, the map elements they control, and the values at which they were fixed.
+if (is.null(baseline_fix_report) || !nrow(baseline_fix_report)) {
+	tibble(note = "No parameters were estimated on a bound.") %>% knitr::kable()
+} else {
+	baseline_fix_report %>%
+		select(key, parameter, mapped_elements, bound, bound_value, estimate,
+					 fixed_at) %>%
+		mutate(across(c(bound_value, estimate, fixed_at), ~ signif(.x, 5))) %>%
+		knitr::kable()
+}
+```
+
+```{r}
+#| label: tbl-baseline-fixed-bounds
+#| echo: true
+#| tbl-cap: Parameters still resting on a bound after the refit. These are reported only; the fixed set is determined once, from the original baseline.
+bound_table(baseline_fixed, "Refitted baseline") %>%
+	mutate(across(c(bound_value, estimate), ~ signif(.x, 5))) %>%
+	knitr::kable()
+```
+
+The objective difference between the two baselines is
+`r if (!is.null(baseline_fixed)) signif(baseline_fixed$objective - baseline_initial$objective, 4) else NA`.
+A material increase means either that the `1e-7` bound tolerance is flagging
+parameters that are not genuinely active, or that `fix_bounded_at = "initial"` has
+moved a parameter away from its optimum.
+
+### Peel series
+
+::: {.callout-note}
+## The model structure is held constant across peels
+
+Every peel inherits the fixed set determined by the original full-data baseline,
+and peel 0 is the refitted baseline itself. Allowing each peel to fix its own
+bounded parameters would let the model structure vary with the amount of data, and
+Mohn's $\rho$ would then confound structural change with the retrospective revision
+it is meant to measure. Peels are still checked for new bound hits, which are
+reported rather than acted on.
+:::
 
 ```{r}
 #| label: fit-peels
 #| echo: true
 #| message: false
-align_active_vector <- function(target, source, label) {
-	target_keys <- paste(names(target), ave(seq_along(target), names(target), FUN = seq_along))
-	source_keys <- paste(names(source), ave(seq_along(source), names(source), FUN = seq_along))
-	pos <- match(target_keys, source_keys)
-	if (anyNA(pos)) stop("Cannot align ", label, " to this peel's active parameters.")
-	unname(source[pos])
-}
-
-summarise_estimability <- function(obj, par) {
-	hessian <- tryCatch(
-		obj$he(par),
-		error = function(e) e
-	)
-	if (inherits(hessian, "error")) {
-		return(list(
-			status = "hessian_error",
-			message = conditionMessage(hessian),
-			min_eigen = NA_real_,
-			n_bad_directions = NA_integer_,
-			bad_params = tibble(Param = character(), MLE = numeric(),
-										Param_check = character())
-		))
-	}
-
-	check <- tryCatch(
-		opal::check_estimability(obj, h = hessian),
-		error = function(e) e
-	)
-	if (inherits(check, "error")) {
-		return(list(
-			status = "check_error",
-			message = conditionMessage(check),
-			min_eigen = NA_real_,
-			n_bad_directions = NA_integer_,
-			bad_params = tibble(Param = character(), MLE = numeric(),
-										Param_check = character())
-		))
-	}
-
-	bad_params <- as_tibble(check$BadParams) %>%
-		select(any_of(c("Param", "MLE", "Param_check")))
-	if (!all(c("Param", "MLE", "Param_check") %in% names(bad_params))) {
-		bad_params <- tibble(Param = character(), MLE = numeric(),
-								 Param_check = character())
-	}
-	list(
-		status = "ok",
-		message = NA_character_,
-		min_eigen = min(Re(check$Eigen$values)),
-		n_bad_directions = length(check$WhichBad),
-		bad_params = bad_params
-	)
-}
-
-fit_peel <- function(inputs, start_par, bounds, n_restart = 4L, grad_tol = 1e-2) {
-  obj <- MakeADFun(func = cmb(opal_model, inputs$data),
-                   parameters = inputs$parameters, map = inputs$map)
-  obj$env$tracemgc <- FALSE
-  par0 <- align_active_vector(obj$par, start_par, "starting values")
-  Lwr <- align_active_vector(obj$par, bounds$lower, "lower bounds")
-  Upr <- align_active_vector(obj$par, bounds$upper, "upper bounds")
-  if (length(par0) != length(Lwr) || length(par0) != length(Upr)) {
-    stop("Peel parameter and bound layouts differ.")
-  }
-  opt <- list(par = par0)
-  for (i in seq_len(n_restart)) {
-    opt <- nlminb(start = opt$par, objective = obj$fn, gradient = obj$gr,
-                  lower = Lwr, upper = Upr,
-                  control = list(eval.max = 10000, iter.max = 10000))
-    if (max(abs(obj$gr(opt$par))) < grad_tol) break
-  }
-  invisible(obj$fn(opt$par))
-  obj$env$last.par.best <- opt$par
-  grad <- as.numeric(obj$gr(opt$par))
-  kkt <- abs(grad)
-  at_l <- is.finite(Lwr) & opt$par <= Lwr + 1e-7
-  at_u <- is.finite(Upr) & opt$par >= Upr - 1e-7
-  kkt[at_l] <- pmax(0, -grad[at_l])
-  kkt[at_u] <- pmax(0, grad[at_u])
-
-  at_bound <- at_l | at_u
-
-  bound_report <- data.frame(
-    parameter   = names(obj$par)[at_bound],
-    estimate    = opt$par[at_bound],
-    bound_hit   = ifelse(at_l[at_bound], "Lower", "Upper"),
-    bound_value = ifelse(at_l[at_bound], Lwr[at_bound], Upr[at_bound]),
-    stringsAsFactors = FALSE
-  )
-
-  rep <- obj$report(opt$par)
-  par_mle <- obj$env$parList(opt$par)
-  sdr <- tryCatch(RTMB::sdreport(obj), error = function(e) NULL)
-  estimability <- summarise_estimability(obj, opt$par)
-  cpue_pred <- as.numeric(rep$cpue_pred)
-  if (length(cpue_pred) != nrow(inputs$data$cpue_data)) {
-    stop("CPUE predictions do not align with the peel CPUE observations.")
-  }
-  list(
-    n_drop = inputs$n_drop, keep = inputs$keep,
-    objective = as.numeric(opt$objective), convergence = opt$convergence,
-    max_grad = max(abs(grad)), kkt_grad = max(kkt), n_at_bound = sum(at_l | at_u),
-    par = opt$par,
-    Lwr = Lwr,
-    Upr = Upr,
-    spawning_biomass_y = as.numeric(rep$spawning_biomass_y),
-    spawning_biomass0_y = as.numeric(rep$spawning_biomass0_y),
-    static_depletion_y = as.numeric(rep$static_depletion_y),
-    dynamic_depletion_y = as.numeric(rep$dynamic_depletion_y),
-    cpue_data = inputs$data$cpue_data,
-    cpue_pred = cpue_pred,
-    par_sel = par_mle$par_sel,
-    sd_summary = if (is.null(sdr)) NULL else summary(sdr, "report"),
-    pdHess = if (is.null(sdr)) NA else sdr$pdHess,
-    estimability = estimability,
-    bound_report = bound_report
-  )
-}
-
-turn_off_bounded_parameters <- function(parameters, map, opt_par, Lwr, Upr, tol = 1e-7) {
-  at_l <- is.finite(Lwr) & opt_par <= Lwr + tol
-  at_u <- is.finite(Upr) & opt_par >= Upr - tol
-  at_bound_idx <- which(at_l | at_u)
-  
-  if (length(at_bound_idx) == 0) {
-    return(list(parameters = parameters, map = map, at_bound_idx = integer(0), report = data.frame()))
-  }
-  
-  new_parameters <- parameters
-  new_map <- map
-  report_rows <- list()
-  par_names <- names(opt_par)
-  
-  for (k in at_bound_idx) {
-    pname <- par_names[k]
-    val <- opt_par[k]
-    bound_type <- if (at_l[k]) "Lower" else "Upper"
-    bound_val  <- if (at_l[k]) Lwr[k] else Upr[k]
-    
-    instance_idx <- sum(par_names[1:k] == pname)
-    
-    if (is.null(new_map[[pname]])) {
-      new_map[[pname]] <- factor(seq_along(new_parameters[[pname]]))
-      matches <- instance_idx
-    } else {
-      m_fac <- map[[pname]]
-      level_id <- as.integer(m_fac)
-      active_levels <- sort(unique(level_id[!is.na(level_id)]))
-      target_level <- active_levels[instance_idx]
-      matches <- which(!is.na(level_id) & level_id == target_level)
-    }
-    
-    new_parameters[[pname]][matches] <- val
-    
-    m_vec <- as.character(new_map[[pname]])
-    m_vec[matches] <- NA_character_
-    new_map[[pname]] <- factor(m_vec)
-    
-    report_rows[[length(report_rows) + 1]] <- data.frame(
-      parameter = pname,
-      element_indices = paste(matches, collapse = ","),
-      estimate = val,
-      bound_hit = bound_type,
-      bound_value = bound_val,
-      stringsAsFactors = FALSE
-    )
-  }
-  
-  for (nm in names(new_map)) {
-    if (!is.null(new_map[[nm]]) && is.factor(new_map[[nm]])) {
-      new_map[[nm]] <- droplevels(new_map[[nm]])
-    }
-  }
-  
-  list(
-    parameters = new_parameters,
-    map = new_map,
-    at_bound_idx = at_bound_idx,
-    report = do.call(rbind, report_rows)
-  )
-}
-
-cache_provenance <- list(
-  schema_version = 9L, # Increment schema version to force re-evaluation
-  reference_cache = normalizePath(base_fit_path),
-  config = bet_config,
-  start_values = "base_fit$opt$par",
-  estimability = "opal::check_estimability(obj, h = obj$he(par))"
-)
-
-cache_matches <- cache_hit("peels") && identical(retro_cache$provenance, cache_provenance)
-
-if (!cache_matches) {
-  if (cache_hit("peels")) message("Retrospective cache provenance changed; recomputing peels.")
-  
-  # --- 1. Evaluate Peel 0 (Reference Model) first ---
-  message("Pre-fitting Peel 0 (Reference Model) to evaluate parameter bounds...")
-  inp0 <- peel_bet_inputs(base_data, bet_parameters, bet_map, lf_wide, wf_wide,
-                          n_drop = 0L, config = bet_config)
-  fit0_initial <- fit_peel(inp0, start_par = bet_reference_par, bounds = bounds)
-  
-  # --- 2. Fix parameters hit on bounds in Peel 0 ---
-  fix_info <- turn_off_bounded_parameters(
-    parameters = bet_parameters,
-    map        = bet_map,
-    opt_par    = fit0_initial$par,
-    Lwr        = fit0_initial$Lwr,
-    Upr        = fit0_initial$Upr
-  )
-  
-  bet_parameters <- fix_info$parameters
-  bet_map        <- fix_info$map
-  
-  if (length(fix_info$at_bound_idx) > 0) {
-    message("Turning off ", length(fix_info$at_bound_idx), " bounded parameter(s) from Peel 0.")
-    keep_idx <- setdiff(seq_along(fit0_initial$par), fix_info$at_bound_idx)
-    
-    bet_reference_par <- fit0_initial$par[keep_idx]
-    bounds$lower      <- fit0_initial$Lwr[keep_idx]
-    bounds$upper      <- fit0_initial$Upr[keep_idx]
-    names(bounds$lower) <- names(bet_reference_par)
-    names(bounds$upper) <- names(bet_reference_par)
-  }
-  
-  # --- 3. Fit all retrospective peels with updated active map ---
-  peel_depths <- (0:bet_config$n_peel) * bet_config$quarters_per_year
-  peels <- purrr::map(peel_depths, function(n_drop) {
-    message("Peel with ", n_drop / bet_config$quarters_per_year, " calendar years removed")
-    inp <- peel_bet_inputs(base_data, bet_parameters, bet_map, lf_wide, wf_wide,
-                           n_drop = n_drop, config = bet_config)
-    fit_peel(inp, start_par = bet_reference_par, bounds = bounds)
-  })
-  names(peels) <- paste0("peel_", 0:bet_config$n_peel)
-  
-  retro_cache$peels <- peels
-  retro_cache$provenance <- cache_provenance
-  saveRDS(retro_cache, cache_file)
+if (needs_fit("peels", provenance_peels)) {
+	peel_depths <- (0:bet_config$n_peel) * bet_config$quarters_per_year
+	peels <- purrr::map(peel_depths, function(n_drop) {
+		if (n_drop == 0L) return(baseline_fixed)
+		message("Peel with ", n_drop / bet_config$quarters_per_year,
+						" calendar years removed")
+		inputs <- peel_bet_inputs(base_data, baseline_parameters, baseline_map,
+															lf_wide, wf_wide, n_drop = n_drop,
+															config = bet_config)
+		fit_peel(inputs, baseline_keyed_start, keyed_lower, keyed_upper)
+	})
+	names(peels) <- paste0("peel_", 0:bet_config$n_peel)
+	retro_cache$peels <- peels
+	write_cache("peels", provenance_peels)
 }
 peels <- retro_cache$peels
+```
+
+```{r}
+#| label: tbl-peel-bounds
+#| echo: true
+#| tbl-cap: Parameters resting on a bound within each peel, after the baseline fixing step.
+purrr::map_dfr(peels, function(p) {
+	tibble(peel = p$n_drop / bet_config$quarters_per_year,
+				 on_bound = nrow(p$bound_report),
+				 parameters = if (nrow(p$bound_report)) {
+					 paste(sort(unique(p$bound_report$key)), collapse = ", ")
+				 } else {
+					 "None"
+				 })
+}) %>%
+	knitr::kable()
 ```
 
 ```{r}
@@ -604,14 +910,14 @@ purrr::map_dfr(peels, function(p) {
 	tibble(peel = p$n_drop / bet_config$quarters_per_year,
 				 time_steps = p$keep, objective = p$objective,
 				 max_grad = p$max_grad, kkt_grad = p$kkt_grad,
-				 n_at_bound = p$n_at_bound, pdHess = p$pdHess,
+				 n_at_bound = p$n_at_bound, 
 				 estimability = est$status,
 				 min_eigen = est$min_eigen,
 				 n_bad_directions = est$n_bad_directions,
 				 bad_parameters = bad_names,
 				 estimability_message = est$message)
 }) %>%
-	mutate(retained = kkt_grad < 1e-2 & (is.na(pdHess) | pdHess),
+	mutate(retained = kkt_grad < 1e-2,
 				 across(c(objective, max_grad, kkt_grad, min_eigen), ~ signif(.x, 4))) %>%
 	knitr::kable()
 ```
@@ -619,7 +925,7 @@ purrr::map_dfr(peels, function(p) {
 `check_estimability()` examines the Hessian only for parameters active in the
 peel's RTMB objective. A `Bad` result therefore identifies an active parameter
 that contributes materially to a near-null Hessian direction; it is not a
-convergence verdict. Read it alongside the KKT gradient, `pdHess`, and any
+convergence verdict. Read it alongside the KKT gradient, and any
 estimability diagnostic error shown in the table.
 
 # Peel time series
@@ -666,8 +972,7 @@ peel_time_series <- purrr::imap_dfr(peels, function(peel_fit, peel_name) {
 		lower = estimate - qnorm(0.975) * se,
 		upper = estimate + qnorm(0.975) * se,
 		lower = pmax(0, lower),
-		upper = if_else(metric == "Spawning biomass", upper, pmin(1, upper))
-	)
+		upper = upper)
 ```
 
 ```{r}
@@ -679,7 +984,7 @@ peel_time_series %>%
 	ggplot(aes(calendar_year, estimate, group = peel)) +
 	geom_ribbon(aes(ymin = lower, ymax = upper, fill = peel), alpha = 0.25, na.rm = TRUE) +
 	geom_line(linewidth = 1.15, aes(colour = peel)) +
-	facet_wrap(~ metric, scales = "free_y", ncol = 1) +
+	facet_wrap(~ metric, scales = "free_y", ncol = 3) +
 	scale_colour_viridis_d(option = "turbo", end = 0.9) +
 	scale_fill_viridis_d(option = "turbo", end = 0.9) +
 	labs(x = "Calendar year", y = NULL, colour = "Peel (years removed)", fill = "Peel (years removed)") +
@@ -739,9 +1044,9 @@ cpue_rmse <- peel_cpue_fit %>%
 #| fig-width: 12
 #| fig-height: 7
 ggplot(peel_cpue_fit, aes(calendar_year, predicted, colour = peel, group = peel)) +
-	geom_point(data = cpue_observed, aes(y = observed), inherit.aes = FALSE,
+	geom_point(data = cpue_observed, aes(x = calendar_year, y = observed), inherit.aes = FALSE,
 				 colour = "grey15", size = 1.1, alpha = 0.7) +
-	geom_line(linewidth = 0.7) +
+	geom_line(linewidth = 1.1) +
 	geom_text(data = cpue_rmse, aes(x = Inf, y = Inf, label = label, colour = peel,
 											group = peel, vjust = 1.1 + 1.15 * label_rank),
 				 hjust = 1.05, size = 2.8, show.legend = FALSE) +
@@ -826,7 +1131,7 @@ peel_selectivity <- purrr::imap_dfr(peels, function(peel_fit, peel_name) {
 #| fig-width: 12
 #| fig-height: 14
 ggplot(peel_selectivity, aes(length, selectivity, colour = peel, group = peel)) +
-	geom_line(linewidth = 0.65) +
+	geom_line(linewidth = 1.1) +
 	facet_wrap(~ fishery, ncol = 3) +
 	coord_cartesian(ylim = c(0, 1)) +
 	scale_colour_viridis_d(option = "turbo", end = 0.9) +
