@@ -1,0 +1,8 @@
+"combo","fishery","lf_prop_rmse","lf_prop_mae","lf_mean_length_rmse","lf_mean_length_bias","sel_est_nat","bound_status"
+"lfwf_downweight10",8,0.0191143673531921,0.00759356899782412,7.58416696065606,-5.88547063934323,"peak_cm=60.1669,asc_denom_cm2=57.6033,desc_denom_cm2=86.2198","peak=free"
+"lfwf_downweight10",9,0.0231273169994824,0.00897596364452985,7.54068941309868,-2.82664525420781,"peak_cm=65.4638,asc_denom_cm2=278.9047,desc_denom_cm2=161.5823","peak=free;desc_width=free"
+"lfwf_downweight10",10,0.0271601931621781,0.00936112244411374,6.98104497694144,-3.01817551978871,"peak_cm=34.4063,asc_denom_cm2=72.0435,desc_denom_cm2=234.963","peak=free;desc_width=free"
+"lfwf_downweight10",11,0.0212713412401228,0.00942519198697903,12.1913552137235,3.91860531781411,"inflection_cm=200,width95_cm=55.4594","peak=upper;plateau=free"
+"lfwf_downweight10",12,0.0467690366633161,0.0143599813383812,13.9854128223319,2.15432942734391,"peak_cm=57.1065,asc_denom_cm2=9.0849,desc_denom_cm2=131.439","peak=free;desc_width=free"
+"lfwf_downweight10",13,0.0389934002189277,0.0136275763397626,15.4534099768114,0.527342899367268,"peak_cm=76.0519,asc_denom_cm2=747.8931,desc_denom_cm2=54.4079","peak=free"
+"lfwf_downweight10",14,0.0446595391440583,0.0136818230955796,9.56765549064382,1.12049556955168,"peak_cm=47.1142,asc_denom_cm2=112.1469,desc_denom_cm2=91.697","peak=free"

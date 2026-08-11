@@ -1,0 +1,632 @@
+---
+title: "opal BET six-fishery aggregation sensitivity"
+date: last-modified
+date-format: "DD MMMM YYYY"
+author:
+  - name: "N. Ducharme-Barth"
+    affiliations:
+      - id: pifsc
+        name: "NOAA Fisheries, Pacific Islands Fisheries Science Center, 1845 Wasp Boulevard, Bldg. 176, Honolulu HI 96818"
+  - name: "D. Webber"
+    affiliations:
+      - id: quantifish
+        name: "Quantifish Limited, Tauranga, New Zealand"
+  - name: "P. Neubauer"
+    affiliations:
+      - id: dragonfly
+        name: "Dragonfly Data Science, Wellington, New Zealand"
+  - name: "K. Kim"
+    affiliations:
+      - id: spc
+        name: "Oceanic Fisheries Programme, Pacific Community, Noumea, New Caledonia"
+  - name: "A. Magnusson"
+    affiliations:
+      - ref: spc
+  - name: "P. Hamer"
+    affiliations:
+      - ref: spc
+meetingtype: "SCIENTIFIC COMMITTEE"
+meetingnumber: "TWENTY-SECOND REGULAR SESSION"
+meetinglocation: "Apia, Samoa"
+meetingdates: "11-19 August 2026"
+repnumber: WCPFC-SC22-2026/SA-WP-02-ALT
+format:
+  pdf:
+    pdf-engine: pdflatex
+    template-partials:
+      - before-body.tex
+    documentclass: SCreport
+    fontsize: 11pt
+    geometry:
+      - margin=1in
+    toc: true
+    number-sections: true
+    link-citations: true
+    colorlinks: true
+    linkcolor: SCblue
+    filecolor: SCblue
+    urlcolor: SCblue
+    citecolor: SCblue
+    toccolor: SCblue
+    highlight-style: github
+    code-block-bg: "#f6f8fa"
+    code-block-border-left: "#c5c5c5"
+    code-font: "Consolas, Monaco, 'Andale Mono', monospace"
+    filters:
+      - inline-code.lua
+    header-includes: |
+     \usepackage{float}
+     \usepackage{draftwatermark}
+     \SetWatermarkLightness{0.92}
+     \providecommand{\citeproc}[2]{#2}
+execute:
+  warning: false
+  message: false
+bibliography: opal.bib
+csl: apa.csl
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+library(tidyverse)
+library(knitr)
+
+doc_dir <- tryCatch(
+  dirname(knitr::current_input(dir = TRUE)),
+  error = function(e) "."
+)
+cache_dir <- file.path(doc_dir, "cached", "bet")
+if (!dir.exists(cache_dir)) {
+  cache_dir <- file.path(getwd(), "assets", "cached", "bet")
+}
+
+bet <- readRDS(file.path(cache_dir, "opal_bet_fit.rds"))
+agg6 <- readRDS(file.path(cache_dir, "opal_bet_agg6_summary.rds"))
+bet_xmodel <- readRDS(file.path(cache_dir, "wcpo_bet_xmodel_biomass.rds"))
+
+opal_cols <- c(
+  navy  = "#013282", ocean = "#064E8F", midblue = "#066AA7", blue  = "#0181C3",
+  teal  = "#27A7BE", aqua  = "#7DD2DB", gold    = "#FCCF43", coral = "#D92208",
+  truth = "#4D4D4D", obs   = "#B3B3B3", struct  = "#8C8C8C"
+)
+model_cols <- c(
+  "15-fishery opal" = unname(opal_cols["teal"]),
+  "6-fishery opal" = unname(opal_cols["gold"]),
+  "6-fishery LF/WF 2x" = unname(opal_cols["midblue"]),
+  "6-fishery LF/WF 4x" = unname(opal_cols["blue"]),
+  "6-fishery fixed desc." = unname(opal_cols["midblue"]),
+  "SS3" = unname(opal_cols["navy"]),
+  "MFCL" = unname(opal_cols["coral"])
+)
+role_cols <- c(observed = unname(opal_cols["obs"]), predicted = unname(opal_cols["gold"]))
+
+theme_opal <- function(base_size = 11, base_family = "") {
+  ggplot2::theme_minimal(base_size = base_size, base_family = base_family) +
+    ggplot2::theme(
+      legend.position  = "bottom",
+      panel.grid.minor = ggplot2::element_blank(),
+      strip.background = ggplot2::element_blank()
+    )
+}
+theme_set(theme_opal())
+
+fmt_num <- function(x, digits = 2) format(round(x, digits), big.mark = ",", nsmall = digits)
+fmt_int <- function(x) format(round(x), big.mark = ",")
+fmt_sci <- function(x) formatC(x, format = "e", digits = 2)
+format_old_fisheries <- function(x) {
+  map_chr(strsplit(x, ",", fixed = TRUE), function(vals) {
+    nums <- as.integer(vals)
+    run_id <- cumsum(c(TRUE, diff(nums) != 1))
+    labels <- map_chr(split(nums, run_id), function(run) {
+      if (length(run) == 1L) {
+        paste0("F", run)
+      } else {
+        paste0("F", min(run), "-F", max(run))
+      }
+    })
+    paste(labels, collapse = ", ")
+  })
+}
+
+group_labels <- agg6$full_g5$grouping %>%
+  mutate(old_label = format_old_fisheries(old_fisheries)) %>%
+  transmute(
+    fishery = group,
+    group_label = paste0("Group ", group, " (old ", old_label, ")"),
+    old_fisheries,
+    catch_units,
+    group_selectivity_form = sel_type
+  )
+
+agg6_primary_runs <- list(
+  "6-fishery opal" = agg6$full_g5,
+  "6-fishery LF/WF 2x" = agg6$upweight2,
+  "6-fishery LF/WF 4x" = agg6$upweight4
+) %>%
+  compact()
+agg6_primary_levels <- names(agg6_primary_runs)
+
+agg6_weight_profile_runs <- list(
+  "0.1x" = agg6$downweight0p1,
+  "0.25x" = agg6$downweight0p25,
+  "0.5x" = agg6$downweight0p5,
+  "1x" = agg6$full_g5,
+  "2x" = agg6$upweight2,
+  "4x" = agg6$upweight4
+) %>%
+  compact()
+
+agg6_weight_profile <- imap_dfr(agg6_weight_profile_runs, function(run, wt_label) {
+  metrics <- run$metrics
+  tibble(
+    comp_weight = readr::parse_number(wt_label),
+    comp_weight_label = wt_label,
+    convergence = metrics$convergence,
+    kkt = metrics$kkt_max_gradient,
+    B0 = metrics$B0,
+    final_sb_sb0 = metrics$final_spawning_biomass_ratio,
+    cpue_rmse = metrics$log_cpue_rmse
+  )
+}) %>%
+  arrange(comp_weight)
+```
+
+# Purpose
+
+This alternate document keeps the main SC22 working paper unchanged and adds an exploratory WCPO bigeye tuna sensitivity run in which the smaller fisheries are aggregated to six model fisheries. The aggregation was designed to preserve the main structural distinctions in the BET input data: fisheries were not pooled across catch units, and logistic and double-normal selectivity forms were kept separate. The CPUE index fishery remains separate as group 6.
+
+The comparison is diagnostic rather than a proposed replacement base model. The grouped model changes the composition likelihood rows and the fishery selectivity map, so optimizer objective values are not directly comparable with the retained 15-fishery fit. The useful comparisons are scale, CPUE fit, depletion trajectory, composition diagnostics, and selectivity plausibility. Additional grouped runs reweight the LF and WF likelihood contributions from 0.1x to 4x the baseline grouped-run weight. Operationally, the 2x run reduces the LF variance adjustment from 80 to 40, the special group-1 LF adjustment from 5000 to 2500, and the WF adjustment from 2000 to 1000; the 4x run reduces those adjustments to 20, 1250, and 500. Downweighting does the reverse: the 0.5x, 0.25x, and 0.1x runs increase these adjustments by factors of 2, 4, and 10.
+
+# Aggregation
+
+```{r}
+#| label: tbl-agg6-grouping
+#| echo: false
+#| tbl-cap: "Six-fishery aggregation used in the exploratory BET sensitivity. Fisheries are grouped only where catch units and selectivity form remain compatible. Catch percentages are calculated separately within weight and numbers catch units."
+
+agg6$full_g5$grouping %>%
+  group_by(catch_units) %>%
+  mutate(percent_within_units = 100 * total_catch / sum(total_catch)) %>%
+  ungroup() %>%
+  mutate(old_label = format_old_fisheries(old_fisheries)) %>%
+  transmute(
+    `New fishery` = group,
+    `Old fisheries` = old_label,
+    `Catch units` = if_else(catch_units == 1, "weight", "numbers"),
+    `Selectivity form` = sel_type,
+    `Within-unit catch (%)` = sprintf("%.1f", percent_within_units)
+  ) %>%
+  knitr::kable(booktabs = TRUE, align = c("r", "l", "l", "l", "r"))
+```
+
+The primary grouped run estimates one or two selectivity terms for each group, with group 5 (old fisheries 1--7) estimating peak, ascending width, and descending width. A second run fixed group 5 descending width to test whether the active bound in the primary grouped run was avoidable. That second run converged cleanly but had a higher objective and poorer weight-composition mean-weight diagnostics, so the plots below use the primary grouped run.
+
+```{r}
+#| label: tbl-agg6-summary
+#| echo: false
+#| tbl-cap: "Comparison of the retained 15-fishery BET fit, LF/WF-reweighted six-fishery aggregation sensitivities, and the fixed-descending-width diagnostic. The Comp. column is the LF/WF likelihood weight relative to the baseline grouped run."
+
+current_cpue_rmse <- sqrt(mean((log(bet$data$cpue_data$value) - log(bet$report$cpue_pred))^2))
+current_final_sb_sb0 <- tail(bet$report$spawning_biomass_y, 1) / bet$report$B0
+
+agg6_metrics <- agg6$full_g5$metrics
+no_desc_metrics <- agg6$no_desc$metrics
+dw0p1_metrics <- agg6$downweight0p1$metrics
+dw0p25_metrics <- agg6$downweight0p25$metrics
+dw0p5_metrics <- agg6$downweight0p5$metrics
+upw2_metrics <- agg6$upweight2$metrics
+upw4_metrics <- agg6$upweight4$metrics
+
+agg6_summary_row <- function(model, run, comp_weight, sel_status) {
+  metrics <- run$metrics
+  tibble(
+    Model = model,
+    Fisheries = 6L,
+    `Comp.` = comp_weight,
+    `Est. par.` = metrics$n_par,
+    `LF rows` = metrics$n_lf_obs,
+    `WF rows` = metrics$n_wf_obs,
+    Convergence = metrics$convergence,
+    Objective = metrics$nll,
+    `Max KKT grad.` = metrics$kkt_max_gradient,
+    B0 = metrics$B0,
+    `Final SB/SB0` = metrics$final_spawning_biomass_ratio,
+    `CPUE RMSE` = metrics$log_cpue_rmse,
+    `Sel. status` = sel_status
+  )
+}
+
+summary_tbl <- bind_rows(
+  tibble(
+    Model = "15-fishery opal",
+    Fisheries = 15L,
+    `Comp.` = "1x",
+    `Est. par.` = length(bet$opt$par),
+    `LF rows` = length(bet$data$lf_year),
+    `WF rows` = length(bet$data$wf_year),
+    Convergence = bet$opt$convergence,
+    Objective = bet$opt$objective,
+    `Max KKT grad.` = bet$kkt_grad,
+    B0 = bet$report$B0,
+    `Final SB/SB0` = current_final_sb_sb0,
+    `CPUE RMSE` = current_cpue_rmse,
+    `Sel. status` = "No active sel. bounds"
+  ),
+  agg6_summary_row("6-fishery LF/WF 0.1x", agg6$downweight0p1, "0.1x", "G5 desc. upper"),
+  agg6_summary_row("6-fishery LF/WF 0.25x", agg6$downweight0p25, "0.25x", "G5 desc. upper"),
+  agg6_summary_row("6-fishery LF/WF 0.5x", agg6$downweight0p5, "0.5x", "G5 desc. upper"),
+  agg6_summary_row("6-fishery opal", agg6$full_g5, "1x", "G5 desc. upper"),
+  agg6_summary_row("6-fishery LF/WF 2x", agg6$upweight2, "2x", "G5 desc. upper"),
+  agg6_summary_row("6-fishery LF/WF 4x", agg6$upweight4, "4x", "G5 desc. upper"),
+  agg6_summary_row("6-fishery fixed desc.", agg6$no_desc, "1x", "G5 desc. fixed")
+) %>%
+  transmute(
+    Model = recode(
+      Model,
+      "15-fishery opal" = "15-fishery",
+      "6-fishery opal" = "6-fishery",
+      "6-fishery LF/WF 0.1x" = "6-fishery 0.1x",
+      "6-fishery LF/WF 0.25x" = "6-fishery 0.25x",
+      "6-fishery LF/WF 0.5x" = "6-fishery 0.5x",
+      "6-fishery LF/WF 2x" = "6-fishery 2x",
+      "6-fishery LF/WF 4x" = "6-fishery 4x",
+      "6-fishery fixed desc." = "6-fishery fixed desc."
+    ),
+    `Comp. wt.` = `Comp.`,
+    `Est. par.`,
+    Conv. = Convergence,
+    `Max KKT` = sprintf("%.4f", `Max KKT grad.`),
+    B0 = fmt_int(B0),
+    `Final SB/SB0` = sprintf("%.3f", `Final SB/SB0`),
+    `CPUE RMSE` = sprintf("%.3f", `CPUE RMSE`),
+    `Sel. status`
+  )
+
+knitr::kable(summary_tbl, booktabs = TRUE, align = c("l", "l", rep("r", 6), "l"))
+```
+
+```{r}
+#| label: fig-agg6-weight-profile
+#| echo: false
+#| fig-pos: H
+#| fig-cap: "Six-fishery BET response to LF/WF likelihood reweighting. Points show converged sensitivity fits; the vertical dashed line marks the baseline grouped-run LF/WF weight."
+#| fig-height: 3.4
+#| fig-width: 8
+
+agg6_weight_profile %>%
+  transmute(
+    comp_weight,
+    `B[0]~(mt)` = B0,
+    `CPUE~log-RMSE` = cpue_rmse
+  ) %>%
+  pivot_longer(-comp_weight, names_to = "quantity", values_to = "value") %>%
+  mutate(
+    quantity = factor(quantity, levels = c("B[0]~(mt)", "CPUE~log-RMSE"))
+  ) %>%
+  ggplot(aes(x = comp_weight, y = value)) +
+  geom_vline(xintercept = 1, linetype = "dashed", colour = opal_cols["struct"]) +
+  geom_line(colour = opal_cols["midblue"], linewidth = 0.85) +
+  geom_point(shape = 21, size = 2.4, fill = "white", colour = opal_cols["midblue"], stroke = 0.8) +
+  facet_wrap(~ quantity, scales = "free_y", labeller = label_parsed, nrow = 1) +
+  scale_x_log10(
+    breaks = agg6_weight_profile$comp_weight,
+    labels = agg6_weight_profile$comp_weight_label
+  ) +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.08))) +
+  labs(x = "LF/WF likelihood weight relative to baseline grouped run", y = NULL) +
+  theme_opal(base_size = 10)
+```
+
+# Comparison Plots
+
+```{r}
+#| label: fig-agg6-catch
+#| echo: false
+#| fig-pos: H
+#| fig-cap: "Observed quarterly catch by six-fishery aggregation group for groups with non-zero observed catch. Group 6 (old F15) carries the CPUE index and weight-composition data but has no observed catch. Catch units differ between panel rows and are therefore shown on separate y-axis scales."
+#| fig-height: 5.5
+#| fig-width: 8
+
+agg6$full_g5$catch %>%
+  left_join(group_labels, by = "fishery") %>%
+  filter(catch > 0) %>%
+  mutate(
+    group_label = factor(group_label, levels = group_labels$group_label),
+    units = factor(units, levels = c("weight", "numbers"))
+  ) %>%
+  ggplot(aes(x = decimal_year, y = catch)) +
+  geom_line(colour = opal_cols["struct"], linewidth = 0.35) +
+  facet_grid(units ~ group_label, scales = "free_y") +
+  labs(x = "Year", y = "Observed catch") +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  theme_opal(base_size = 9) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r}
+#| label: fig-agg6-cpue
+#| echo: false
+#| fig-pos: H
+#| fig-cap: "CPUE fit comparison for the retained 15-fishery BET fit, the baseline six-fishery aggregation sensitivity, and LF/WF-upweighted six-fishery sensitivities. Points and log-scale error bars are the observed standardized CPUE series; fitted lines are model predictions by index month."
+#| fig-height: 4.8
+#| fig-width: 8
+
+bet_cpue <- bet$data$cpue_data %>%
+  mutate(
+    index_month = factor(month, levels = sort(unique(month)),
+                         labels = month.name[sort(unique(month))]),
+    decimal_year = year + (month - 1) / 12,
+    pred = as.numeric(bet$report$cpue_pred),
+    sigma = as.numeric(bet$report$cpue_sigma),
+    lower = exp(log(value) - sigma),
+    upper = exp(log(value) + sigma),
+    model = "15-fishery opal"
+  )
+
+agg_cpue <- imap_dfr(
+  agg6_primary_runs,
+  ~ .x$cpue %>% mutate(model = .y)
+)
+
+cpue_combined <- bind_rows(
+  bet_cpue %>% select(year, month, decimal_year, index_month, value, lower, upper, pred, model),
+  agg_cpue %>% select(year, month, decimal_year, index_month, value, lower, upper, pred, model)
+) %>%
+  mutate(model = factor(model, levels = c("15-fishery opal", agg6_primary_levels)))
+
+ggplot(cpue_combined, aes(x = decimal_year)) +
+  geom_errorbar(
+    data = filter(cpue_combined, model == "15-fishery opal"),
+    aes(ymin = lower, ymax = upper), width = 0.25,
+    colour = "grey20", alpha = 0.8, linewidth = 0.25
+  ) +
+  geom_point(
+    data = filter(cpue_combined, model == "15-fishery opal"),
+    aes(y = value), shape = 21, size = 1.2,
+    fill = "white", colour = "black", stroke = 0.25
+  ) +
+  geom_line(aes(y = pred, colour = model), linewidth = 0.85) +
+  facet_wrap(~ index_month, scales = "free_y", ncol = 2) +
+  scale_colour_manual(values = model_cols) +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "Year", y = "Standardized CPUE", colour = "Model") +
+  theme_opal()
+```
+
+```{r}
+#| label: fig-agg6-biomass
+#| echo: false
+#| fig-pos: H
+#| fig-cap: "Spawning biomass and depletion trajectory comparison. The retained 15-fishery opal fit is shown with its approximate 95% uncertainty ribbon; the baseline and LF/WF-upweighted six-fishery aggregation sensitivities are shown as lines. SS3 and MFCL reference trajectories are included for context."
+#| fig-height: 5
+#| fig-width: 8
+
+bet_biomass_unc <- bet$diagnostics$biomass_uncertainty
+current_biomass <- bind_rows(
+  bet_biomass_unc %>%
+    transmute(
+      year,
+      quantity = "Spawning~biomass~(mt)",
+      value = spawning_biomass,
+      lower = if_else(is.finite(spawning_biomass_se),
+                      pmax(0, spawning_biomass - 1.96 * spawning_biomass_se),
+                      NA_real_),
+      upper = if_else(is.finite(spawning_biomass_se),
+                      spawning_biomass + 1.96 * spawning_biomass_se,
+                      NA_real_)
+    ),
+  bet_biomass_unc %>%
+    transmute(
+      year,
+      quantity = "SB[t]/SB[0]",
+      value = sb_sb0,
+      lower = if_else(is.finite(sb_sb0_se), pmax(0, sb_sb0 - 1.96 * sb_sb0_se), NA_real_),
+      upper = if_else(is.finite(sb_sb0_se), sb_sb0 + 1.96 * sb_sb0_se, NA_real_)
+    ),
+  bet_biomass_unc %>%
+    transmute(
+      year,
+      quantity = "SB[t]/SB[list(t,F==0)]",
+      value = dynamic_depletion,
+      lower = if_else(is.finite(dynamic_depletion_se),
+                      pmax(0, dynamic_depletion - 1.96 * dynamic_depletion_se),
+                      NA_real_),
+      upper = if_else(is.finite(dynamic_depletion_se),
+                      dynamic_depletion + 1.96 * dynamic_depletion_se,
+                      NA_real_)
+    )
+) %>%
+  mutate(model = "15-fishery opal")
+
+agg_biomass <- imap_dfr(agg6_primary_runs, function(run, model_label) {
+  run$biomass %>%
+    transmute(year, quantity = "Spawning~biomass~(mt)", value = spawning_biomass,
+              lower = NA_real_, upper = NA_real_, model = model_label) %>%
+    bind_rows(
+      run$biomass %>%
+        transmute(year, quantity = "SB[t]/SB[0]", value = sb_sb0,
+                  lower = NA_real_, upper = NA_real_, model = model_label),
+      run$biomass %>%
+        transmute(year, quantity = "SB[t]/SB[list(t,F==0)]", value = dynamic_depletion,
+                  lower = NA_real_, upper = NA_real_, model = model_label)
+    )
+})
+
+xmodel_long <- bet_xmodel %>%
+  filter(model %in% c("MFCL-v11", "02-fix-sel")) %>%
+  mutate(model = recode(model, "MFCL-v11" = "MFCL", "02-fix-sel" = "SS3")) %>%
+  arrange(model, ts) %>%
+  group_by(model) %>%
+  mutate(
+    sb0 = mean(ssb[1:4]),
+    static_depletion = ssb / sb0,
+    static_depletion_se = ssb_se / sb0
+  ) %>%
+  ungroup() %>%
+  pivot_longer(
+    cols = c(ssb, depletion, static_depletion),
+    names_to = "quantity_id",
+    values_to = "value"
+  ) %>%
+  mutate(
+    se = case_when(
+      quantity_id == "ssb" ~ ssb_se,
+      quantity_id == "depletion" ~ depletion_se,
+      quantity_id == "static_depletion" ~ static_depletion_se
+    ),
+    quantity = case_when(
+      quantity_id == "ssb" ~ "Spawning~biomass~(mt)",
+      quantity_id == "static_depletion" ~ "SB[t]/SB[0]",
+      quantity_id == "depletion" ~ "SB[t]/SB[list(t,F==0)]"
+    ),
+    year = if_else(model == "MFCL", year, year + (season - 1) / 4),
+    lower = pmax(0, value - 1.96 * se),
+    upper = value + 1.96 * se
+  ) %>%
+  select(year, quantity, value, lower, upper, model)
+
+biomass_combined <- bind_rows(current_biomass, agg_biomass, xmodel_long) %>%
+  mutate(
+    quantity = factor(
+      quantity,
+      levels = c("Spawning~biomass~(mt)", "SB[t]/SB[0]", "SB[t]/SB[list(t,F==0)]")
+    ),
+    model = factor(model, levels = c("15-fishery opal", agg6_primary_levels, "SS3", "MFCL"))
+  ) %>%
+  filter(year <= 2018)
+
+ggplot(biomass_combined, aes(x = year, y = value, colour = model, fill = model)) +
+  geom_ribbon(
+    data = filter(biomass_combined, model == "15-fishery opal", is.finite(lower), is.finite(upper)),
+    aes(ymin = lower, ymax = upper),
+    alpha = 0.16, colour = NA
+  ) +
+  geom_line(linewidth = 0.85) +
+  facet_wrap(~ quantity, nrow = 1, scales = "free_y", labeller = label_parsed) +
+  scale_colour_manual(values = model_cols) +
+  scale_fill_manual(values = model_cols) +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  labs(x = "Year", y = NULL, colour = "Model", fill = "Model") +
+  guides(fill = "none") +
+  theme_opal()
+```
+
+```{r}
+#| label: fig-agg6-lf
+#| echo: false
+#| fig-pos: H
+#| fig-cap: "Mean observed and fitted length-composition proportions for the baseline and LF/WF-upweighted six-fishery aggregation sensitivities, aggregated over all years. Group labels identify the old BET fisheries pooled into each group."
+#| fig-height: 5.8
+#| fig-width: 8
+
+agg_lf <- imap_dfr(
+  agg6_primary_runs,
+  ~ .x$lf_mean %>% mutate(model = .y)
+) %>%
+  left_join(group_labels, by = "fishery") %>%
+  mutate(
+    group_label = factor(group_label, levels = group_labels$group_label),
+    model = factor(model, levels = agg6_primary_levels)
+  )
+
+agg_lf_obs <- agg_lf %>%
+  filter(series == "Observed", model == agg6_primary_levels[1])
+
+ggplot() +
+  geom_col(
+    data = agg_lf_obs,
+    aes(x = length, y = proportion),
+    fill = role_cols["observed"], width = 1.8
+  ) +
+  geom_line(
+    data = filter(agg_lf, series == "Predicted"),
+    aes(x = length, y = proportion, colour = model),
+    linewidth = 0.8
+  ) +
+  facet_wrap(~ group_label, ncol = 2, scales = "free_y") +
+  scale_colour_manual(values = model_cols) +
+  labs(x = "Length (cm)", y = "Mean proportion", colour = "Model") +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  theme_opal(base_size = 10)
+```
+
+```{r}
+#| label: fig-agg6-wf
+#| echo: false
+#| fig-pos: H
+#| fig-cap: "Mean observed and fitted weight-composition proportions for the baseline and LF/WF-upweighted six-fishery aggregation sensitivities, aggregated over all years. The grouped weight-composition fit has one pooled catch fishery (group 5, old F1-F7) and the CPUE-index fishery (group 6, old F15)."
+#| fig-height: 4
+#| fig-width: 8
+
+agg_wf <- imap_dfr(
+  agg6_primary_runs,
+  ~ .x$wf_mean %>% mutate(model = .y)
+) %>%
+  left_join(group_labels, by = "fishery") %>%
+  mutate(
+    group_label = factor(group_label, levels = group_labels$group_label),
+    model = factor(model, levels = agg6_primary_levels)
+  )
+
+agg_wf_obs <- agg_wf %>%
+  filter(series == "Observed", model == agg6_primary_levels[1])
+
+ggplot() +
+  geom_col(
+    data = agg_wf_obs,
+    aes(x = weight, y = proportion),
+    fill = role_cols["observed"], width = 1.8
+  ) +
+  geom_line(
+    data = filter(agg_wf, series == "Predicted"),
+    aes(x = weight, y = proportion, colour = model),
+    linewidth = 0.8
+  ) +
+  facet_wrap(~ group_label, ncol = 2, scales = "free_y") +
+  scale_colour_manual(values = model_cols) +
+  labs(x = "Weight (kg)", y = "Mean proportion", colour = "Model") +
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = c(0, 0.05))) +
+  theme_opal(base_size = 10)
+```
+
+```{r}
+#| label: fig-agg6-selectivity
+#| echo: false
+#| fig-pos: H
+#| fig-cap: "Estimated selectivity-at-length curves for the baseline and LF/WF-upweighted six-fishery aggregation sensitivities. The pooled old F1-F7 group estimates a very broad descending limb, with the descending-width term on its upper bound in all three primary grouped runs."
+#| fig-height: 5
+#| fig-width: 8
+
+agg_sel <- imap_dfr(
+  agg6_primary_runs,
+  ~ .x$selectivity %>% mutate(model = .y)
+) %>%
+  left_join(group_labels, by = "fishery") %>%
+  mutate(
+    group_label = factor(group_label, levels = group_labels$group_label),
+    model = factor(model, levels = agg6_primary_levels)
+  )
+
+ggplot(agg_sel, aes(x = length, y = selectivity, colour = model)) +
+  geom_line(linewidth = 0.85) +
+  facet_wrap(~ group_label, ncol = 2) +
+  coord_cartesian(ylim = c(0, 1)) +
+  scale_colour_manual(values = model_cols) +
+  labs(x = "Length (cm)", y = "Selectivity", colour = "Model") +
+  theme_opal(base_size = 10)
+```
+
+# Interpretation
+
+The baseline six-fishery aggregation preserves the main biomass and CPUE behaviour of the retained 15-fishery diagnostic fit. The estimated $B_0$ is `r fmt_int(agg6_metrics$B0)` mt, compared with `r fmt_int(bet$report$B0)` mt in the retained fit, and the final $SB/SB_0$ is `r sprintf("%.3f", agg6_metrics$final_spawning_biomass_ratio)` compared with `r sprintf("%.3f", current_final_sb_sb0)`. The CPUE log-RMSE is also essentially unchanged (`r sprintf("%.3f", agg6_metrics$log_cpue_rmse)` for the grouped run versus `r sprintf("%.3f", current_cpue_rmse)` for the retained fit), which indicates that aggregating the smaller fisheries did not materially alter the abundance-index fit.
+
+Upweighting the LF and WF likelihoods did not make the biomass scale float upward. Instead, $B_0$ declined from `r fmt_int(agg6_metrics$B0)` mt in the baseline grouped run to `r fmt_int(upw2_metrics$B0)` mt under 2x LF/WF weight and `r fmt_int(upw4_metrics$B0)` mt under 4x LF/WF weight. Further downweighting had the opposite effect: $B_0$ increased to `r fmt_int(dw0p5_metrics$B0)` mt under 0.5x LF/WF weight, `r fmt_int(dw0p25_metrics$B0)` mt under 0.25x weight, and `r fmt_int(dw0p1_metrics$B0)` mt under the extreme 0.1x weight. The CPUE fit was best at 0.5x LF/WF weight in this profile, but the 0.1x case should be treated as a stress test because the composition likelihood is nearly switched off. Overall, the profile indicates that the LF/WF composition data pull the grouped opal model toward a lower absolute spawning-biomass scale than the CPUE index alone would support.
+
+The main diagnostic concern remains selectivity for group 5, which pools old fisheries 1--7. That group is structurally compatible in the sense that all old fisheries have numbers catch and double-normal selectivity, but the fitted grouped selectivity is broad and the descending-width term reaches its upper bound in the baseline, 2x, and 4x grouped runs. This is a plausible consequence of pooling fisheries with different size selectivity into one curve. The fixed-descending-width variant removes the active bound, but its objective is about `r sprintf("%.1f", no_desc_metrics$nll - agg6_metrics$nll)` units higher and its weight-composition mean-weight diagnostics are poorer. For that reason, the primary grouped run is the better sensitivity comparison, while the active bound should be reported if this alternative is discussed.
+
+# References
+
+::: {#refs}
+:::
