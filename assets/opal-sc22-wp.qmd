@@ -1237,11 +1237,11 @@ The package source code, function documentation, and worked examples are publicl
 
 # Model structure {#sec-model-structure}
 
-`opal` estimates age-structured population dynamics and accommodates age- or length-based processes. The population is tracked as numbers-at-age. Biological quantities --- weight, maturity, fecundity, natural mortality, and sex ratio --- may be supplied on either an age basis or a length basis: a vector defined over age classes is used directly, while a vector defined over length bins is converted to age through a probability-of-length-at-age (PLA) matrix. Selectivity is likewise defined on a length basis and mapped to age through the PLA. This structure allows population demographics to be specified in terms of either age or length, and allows the model to fit multiple data types: relative abundance indices (CPUE), length composition, and weight composition. Where time-varying or hierarchically structured processes are required, parameters may be specified as random effects and integrated out using the Laplace approximation provided by RTMB [@kristensen_tmb_2016].
+`opal` estimates age-structured population dynamics and accommodates age- or length-based processes. The population is tracked as numbers-at-age. Biological quantities --- weight, maturity, fecundity, natural mortality, and sex ratio --- may be supplied on either an age basis or a length basis: a vector defined over age classes is used directly, while a vector defined over length bins is converted to age through a probability-of-length-at-age (PLA) matrix. Selectivity can likewise be defined on a length basis and mapped to age through the PLA. This structure allows population demographics to be specified in terms of either age or length, and allows the model to fit multiple data types: relative abundance indices (CPUE), length composition, and weight composition. Where time-varying or hierarchically structured processes are required, parameters may be specified as random effects and integrated out using the Laplace approximation provided by RTMB [@kristensen_tmb_2016].
 
 The model is implemented as a single objective function, `opal_model()`, that returns the negative log-likelihood (NLL) for a given set of parameters and data. Rather than encoding the population dynamics and observation model as a single monolithic routine, `opal_model()` orchestrates a sequence of standalone, individually documented module functions, each responsible for one component of the calculation. Population-model components --- growth, selectivity, recruitment, and the data likelihoods --- are implemented as separate exported functions rather than embedded in a single routine, so that components can be modified, replaced, or extended independently, and so that individual modules can be tested in isolation. The collection of module functions is registered through a single accessor for use when the model is passed to the Bayesian sampler. This modular organization is intended to make the codebase tractable to maintain, human readable and to lower the barrier to community contribution.
 
-The principal modules, in the order they are evaluated, are: mean length-at-age (`get_growth()`); the standard deviation of length-at-age (`get_sd_at_age()`); the PLA matrix (`get_pla()`); weight-, maturity-, and fecundity-at-age (`get_weight_at_length()`, `get_maturity_at_age()`, and a resolver, `resolve_bio_vector()`, that accepts either age- or length-basis inputs); selectivity-at-age (`get_selectivity()`, with the parametric forms `sel_logistic()` and `sel_double_normal()`); initial equilibrium numbers-at-age (`get_initial_numbers()`); the forward population dynamics and harvest (the `do_dynamics()` and `get_harvest_rate()`); recruitment (`get_recruitment()`); the data likelihoods (`get_cpue_like()`, `get_length_like()`, `get_weight_like()`); and the prior and penalty terms (`get_recruitment_prior()`, `evaluate_priors()`). 
+The principal modules, in the order they are evaluated, are: mean length-at-age (`get_growth()`); the standard deviation of length-at-age (`get_sd_at_age()`); the PLA matrix (`get_pla()`); weight-, maturity-, and fecundity-at-age (`get_weight_at_length()`, `get_maturity_at_age()`, and a resolver, `resolve_bio_vector()`, that accepts either age- or length-basis inputs); selectivity-at-age (`get_selectivity()`, with the parametric forms `sel_logistic()` and `sel_double_normal()`); initial equilibrium numbers-at-age (`get_initial_numbers()`); the forward population dynamics and harvest (`do_dynamics()` and `get_harvest_rate()`); recruitment (`get_recruitment()`); the data likelihoods (`get_cpue_like()`, `get_length_like()`, `get_weight_like()`); and the prior and penalty terms (`get_recruitment_prior()`, `evaluate_priors()`). 
 
 ## Population dynamics {#sec-population-dynamics}
 
@@ -1292,7 +1292,7 @@ where $r_a$, $m_a$, and $f_a$ are sex ratio, maturity, and fecundity at age, res
 
 ### Initial conditions {#sec-initial-conditions}
 
-The population is initialized at the unfished equilibrium. Unfished survivorship-per-recruit accumulates natural mortality across ages with a plus-group at the oldest age, $\phi_a^{0} = \phi_{a-1}^{0}\,e^{-M_{a-1}}$ with $\phi_{n}^{0}$ divided by $1 - e^{-M_{n}}$, and the unfished spawners-per-recruit is $\Phi_0 = \sum_a \psi_a\, \phi_a^{0}$. Unfished recruitment and the Beverton-Holt parameters follow from unfished spawning biomass $B_0$ and steepness $h$:
+The population is initialized at the unfished equilibrium. Unfished survivorship-per-recruit accumulates natural mortality across ages with a plus-group at the oldest age, $\phi_a^{0} = \phi_{a-1}^{0}\,e^{-M_{a-1}}$ with $\phi_{n}^{0}$ divided by $1 - e^{-M_{n}}$ where $n$ is the index of the oldest age, and the unfished spawners-per-recruit is $\Phi_0 = \sum_a \psi_a\, \phi_a^{0}$. Unfished recruitment and the Beverton-Holt parameters follow from unfished spawning biomass $B_0$ and steepness $h$:
 
 $$
 R_0 = \frac{B_0}{\Phi_0},
@@ -1304,11 +1304,11 @@ $$
 
 *Module: `get_initial_numbers()`*
 
-When initial fishing mortality is specified, survivorship is recomputed with total mortality $Z_a = M_a + \sum_f F_f^{\mathrm{init}} s_{f,a}$, giving a fished spawners-per-recruit $\Phi_{\mathrm{eq}}$ and an equilibrium recruitment $R_{\mathrm{eq}} = a_{\mathrm{BH}} - b_{\mathrm{BH}}/\Phi_{\mathrm{eq}}$. Initial numbers-at-age are $N_a^{\mathrm{init}} = R_{\mathrm{eq}}\,\phi_a$, optionally modified by estimated initial age-structure deviations with the lognormal bias correction described below.
+When initial fishing mortality is specified, survivorship is recomputed with total mortality $Z_a = M_a + \sum_f F_f^{\mathrm{init}} s_{f,a}$, giving a fished spawners-per-recruit $\Phi_{\mathrm{eq}}$ and an equilibrium recruitment $R_{\mathrm{eq}} = a_{\mathrm{BH}} - b_{\mathrm{BH}}/\Phi_{\mathrm{eq}}$. Initial numbers-at-age are $N_a^{\mathrm{init}} = R_{\mathrm{eq}}\,\phi_a$, optionally modified by estimated initial age-structure deviations with the lognormal bias correction described below (@sec-recruitment).
 
 ### Harvest and the forward projection {#sec-harvest}
 
-The population is projected forward over years and seasons. Within each season, survival from natural mortality is $S_a = e^{-M_a / n_{\mathrm{season}}}$. Removals are taken as a harvest fraction rather than a continuous fishing-mortality rate. For each fishery with observed catch, a fully selected harvest rate is obtained by dividing the observed catch by the available biomass (or available numbers, depending on the catch units of the fishery),
+The population is projected forward over years and seasons. Within each season, survival from natural mortality is $S_a = e^{-M_a / n_{\mathrm{season}}}$, where $n_{\mathrm{season}}$ is the number of seasons per year. Removals are taken as a harvest fraction rather than a continuous fishing-mortality rate. For each fishery with observed catch, a fully selected harvest rate is obtained by dividing the observed catch by the available biomass (or available numbers, depending on the catch units of the fishery),
 
 $$
 F_{f} = \frac{C_{f}}{\sum_a N_a\, s_{f,a}\, w_{f,a} + \varepsilon},
@@ -1430,7 +1430,7 @@ Projections are conditioned on the specified future catch and propagate paramete
 
 ## Model diagnostics {#sec-model-diagnostics}
 
-`opal` provides a set of built-in diagnostics intended to support model evaluation and validation. These include estimability checks and parameter-correlation summaries derived from the fitted model; simulation self-testing, in which data are simulated from the model and re-estimated to confirm that parameters can be recovered; posterior-predictive checking where the observations are compared to the simulated distributions of the predictions given the model and OSA residuals, computed through RTMB's `oneStepPredict()`, which provide residuals that are independent and identically distributed under a correctly specified model and are therefore more readily interpretable than ordinary residuals for non-Gaussian observations [@dunn_randomized_1996; @thygesen_validation_2017; @kristensen_tmb_2016]. The simulation and posterior-predictive capabilities also support the projection and Bayesian workflows described above.
+`opal` provides a set of built-in diagnostics intended to support model evaluation and validation. These include estimability checks (`check_estimability()`) and parameter-correlation summaries (`get_cor_pairs()`) derived from the fitted model; simulation self-testing, in which data are simulated from the model and re-estimated to confirm that parameters can be recovered; posterior-predictive checking where the observations are compared to the simulated distributions of the predictions given the model and OSA residuals, computed through RTMB's `oneStepPredict()`, which provide residuals that are independent and identically distributed under a correctly specified model and are therefore more readily interpretable than ordinary residuals for non-Gaussian observations [@dunn_randomized_1996; @thygesen_validation_2017; @kristensen_tmb_2016]. The simulation and posterior-predictive capabilities also support the projection and Bayesian workflows described above.
 
 # Case studies {#sec-case-studies}
 
@@ -1452,7 +1452,7 @@ The second case study used the data from a fleets-as-areas model described in th
 
 The diagnostic configuration used the quarterly standardized CPUE series as four seasonal indices, fitted length compositions from fisheries 8--14, and fitted weight compositions from fisheries 1, 2, 3, 4, 6, 7, and 15. Sensitivity runs indicated that the size-composition likelihoods pulled the absolute spawning-biomass scale below the SS3 and MFCL reference models, while posterior-predictive composition checks indicated uneven relative weighting among fisheries. The retained fit therefore used fishery-specific variance adjustments to the length-frequency (LF) and weight-frequency (WF) data sets. Weight compositions for fishery 5 remained inactive after diagnostic runs failed to converge cleanly. Recruitment deviations were estimated across the model period, catchability was estimated separately by quarterly index, and selected selectivity parameters were estimated for the fisheries with active composition data. Growth, natural mortality, steepness, recruitment variability, effort creep (assumed to be zero), and the remaining selectivity parameters were fixed at the bundled reference values. The quarterly catch history used by the model is shown by fishery and catch-unit group in @fig-bet-catch-weight and @fig-bet-catch-numbers.
 
-The final bigeye tuna (BET) model configuration converged according to `nlminb`, with a KKT-style[^1] projected gradient close to zero after accounting for active parameter bounds; the larger raw gradient is reported separately in @tbl-bet-fit-summary. Remaining active selectivity bounds are reported in @tbl-bet-selectivity-issues. Fitting this diagnostic configuration from the retained-cache starting values to the maximum-likelihood estimate took approximately `r bet_mle_runtime_text` on the workstation used to build this document; the final optimizer restart recorded `r bet_mle_iterations` iterations, `r bet_mle_function_evals` function evaluations, and `r bet_mle_gradient_evals` gradient evaluations. Hessian-based uncertainty was computed with `RTMB::sdreport()` using a supplied fixed-effect Hessian from `optimHess()` with a finite-difference step of $10^{-4}$; this Hessian was positive definite, with minimum eigenvalue `r signif(bet$diagnostics$biomass_uncertainty_min_hessian_eigenvalue, 3)`. The additive objective decomposition was still dominated numerically by the downweighted composition likelihoods, especially the weight-composition component, while the CPUE component contributed the abundance trend information and the recruitment-deviation density regularized quarterly departures from the stock-recruitment curve. The estimated unfished spawning biomass was approximately `r format(round(bet$report$B0), big.mark = ",")` mt, close to the MFCL implied scale of `r format(round(bet_mfcl_b0), big.mark = ",")` mt and closer to the SS3 fixed-selectivity scale of `r format(round(bet_ss3_fix_b0), big.mark = ",")` mt than an earlier higher-composition-weight diagnostic fit. The final-year relative spawning biomass was `r round(bet_final_sb_b0, 3)` when scaled by $SB_0$ (@tbl-bet-depletion). The dynamic depletion ratio was slightly lower (`r round(bet_final_dyn_dep, 3)`) because it uses the time-varying unfished spawning biomass denominator rather than the static $SB_0$ denominator.
+The final bigeye tuna (BET) model configuration converged according to `nlminb`, with a KKT-style[^1] projected gradient close to zero after accounting for active parameter bounds; the larger raw gradient is reported separately in @tbl-bet-fit-summary. Remaining active selectivity bounds are reported in @tbl-bet-selectivity-issues. Fitting this diagnostic configuration from the retained-cache starting values to the maximum-likelihood estimate took approximately `r bet_mle_runtime_text`; the final optimizer restart recorded `r bet_mle_iterations` iterations, `r bet_mle_function_evals` function evaluations, and `r bet_mle_gradient_evals` gradient evaluations. Hessian-based uncertainty was computed with `RTMB::sdreport()` using a supplied fixed-effect Hessian from `optimHess()` with a finite-difference step of $10^{-4}$; this Hessian was positive definite, with minimum eigenvalue `r signif(bet$diagnostics$biomass_uncertainty_min_hessian_eigenvalue, 3)`. The additive objective decomposition was still dominated numerically by the downweighted composition likelihoods, especially the weight-composition component, while the CPUE component contributed the abundance trend information and the recruitment-deviation density regularized quarterly departures from the stock-recruitment curve. The estimated unfished spawning biomass was approximately `r format(round(bet$report$B0), big.mark = ",")` mt, close to the MFCL implied scale of `r format(round(bet_mfcl_b0), big.mark = ",")` mt and closer to the SS3 fixed-selectivity scale of `r format(round(bet_ss3_fix_b0), big.mark = ",")` mt than an earlier higher-composition-weight diagnostic fit. The final-year relative spawning biomass was `r round(bet_final_sb_b0, 3)` when scaled by $SB_0$ (@tbl-bet-depletion). The dynamic depletion ratio was slightly lower (`r round(bet_final_dyn_dep, 3)`) because it uses the time-varying unfished spawning biomass denominator rather than the static $SB_0$ denominator.
 
 [^1]: Following the Karush–Kuhn–Tucker (KKT) conditions for bound-constrained optimization, gradient components at an active bound are not treated as evidence of non-convergence provided their sign is consistent with the constraint (e.g., pushing further against, rather than away from, the bound).
 
@@ -1523,7 +1523,7 @@ Generative AI tools were used to assist with code development, refactoring, and 
 
 ```{r}
 #| label: tbl-paka-lf-convergence
-#| tbl-cap: "`opal` 'opakapaka model metrics: positive-definite Hessian, maximum absolute gradient (mgc), minimum Hessian eigenvalue, parameter estimability, runtime, number of parameters, and sigma R."
+#| tbl-cap: "`opal` 'opakapaka model metrics for the fixed effects and random effects versions: positive-definite Hessian, maximum absolute gradient (mgc), minimum Hessian eigenvalue, parameter estimability, runtime, number of parameters, and sigma R."
 #| echo: false
 
 est <- paka$estim
@@ -1984,7 +1984,7 @@ knitr::kable(bet_agg6_summary_tbl, booktabs = TRUE,
 ```{r}
 #| echo: false
 #| label: fig-paka-lf-biomass
-#| fig-cap: "Estimated spawning-biomass trajectory for the 'opakapaka `opal` model estimated using either fixed effects or random effects (RE) compared with the SS3 operating model (OM) and estimation model (EM), 1949--2023."
+#| fig-cap: "Estimated spawning-biomass trajectory for the 'opakapaka `opal` model estimated using either fixed effects (teal solid) or random effects (RE; blue solid) compared with the SS3 operating model (OM; gray dash) and estimation model (EM; navy dotted), 1949--2023."
 #| fig-height: 4.5
 #| fig-width: 8
 calendar_years = paka$ssb$year
@@ -2228,7 +2228,7 @@ ggplot(filter(bet_catch_by_fishery, units == "numbers"),
 ```{r}
 #| echo: false
 #| label: fig-bet-cpue-fit
-#| fig-cap: "Observed, predicted, and simulated standardized CPUE for the fitted `opal` WCPO bigeye tuna diagnostic model, shown by index month. Vertical error bars show one fitted standard deviation on the log scale; light teal lines show fitted-model simulations from the retained 15-fishery model. The matched six-fishery aggregation sensitivity and illustrative fits by MFCL and SS3 are also shown. The RMSE of the log-residuals is shown for each model and index month."
+#| fig-cap: "Observed (open circles), predicted (solid, thick teal line), and simulated (thin, light teal lines) standardized CPUE for the fitted `opal` WCPO bigeye tuna diagnostic model, shown by index month. Vertical error bars show one fitted standard deviation on the log scale; light teal lines show fitted-model simulations from the retained 15-fishery model. The matched six-fishery aggregation sensitivity and illustrative fits by MFCL and SS3 are also shown. The RMSE of the log-residuals is shown for each model and index month."
 #| fig-height: 4.5
 #| fig-width: 8
 
@@ -2386,7 +2386,7 @@ ggplot(bind_rows(bet_osa_qq, bet_osa_time), aes(x = x, y = y)) +
 ```{r}
 #| echo: false
 #| label: fig-bet-lf-diagnostics
-#| fig-cap: "Observed, predicted, and simulated length-composition proportions for WCPO bigeye tuna fisheries 8-14, summed over all years using the variance-adjusted effective sample sizes. Each simulated line independently simulates the fitted row-level compositions and then pools those simulated counts over all years within fishery."
+#| fig-cap: "Observed (gray bars), predicted (solid thick teal line), and simulated (thin, light teal lines) length-composition proportions for WCPO bigeye tuna fisheries 8-14, summed over all years using the variance-adjusted effective sample sizes. Each simulated line independently simulates the fitted row-level compositions and then pools those simulated counts over all years within fishery."
 #| fig-height: 7
 #| fig-width: 8
 
@@ -2482,7 +2482,7 @@ ggplot() +
 ```{r}
 #| echo: false
 #| label: fig-bet-wf-diagnostics
-#| fig-cap: "Observed, predicted, and simulated weight-composition proportions for active WCPO bigeye tuna weight-composition fisheries, summed over all years using the variance-adjusted effective sample sizes. Each simulated line independently simulates the fitted row-level compositions and then pools those simulated counts over all years within fishery."
+#| fig-cap: "Observed (gray bars), predicted (solid thick teal line), and simulated (thin, light teal lines) weight-composition proportions for active WCPO bigeye tuna weight-composition fisheries, summed over all years using the variance-adjusted effective sample sizes. Each simulated line independently simulates the fitted row-level compositions and then pools those simulated counts over all years within fishery."
 #| fig-height: 7
 #| fig-width: 8
 
@@ -2578,7 +2578,7 @@ ggplot() +
 ```{r}
 #| echo: false
 #| label: fig-bet-agg6-composition-diagnostics
-#| fig-cap: "Observed, predicted, and simulated composition proportions for the matched six-fishery WCPO bigeye tuna aggregation sensitivity, summed over all years using the variance-adjusted effective sample sizes. Length-composition groups are shown for groups 1--4 and weight-composition groups for groups 5--6; facet labels identify the original BET fisheries pooled into each group. Each simulated line independently simulates the fitted row-level compositions and then pools those simulated counts over all years within group."
+#| fig-cap: "Observed (gray bars), predicted (solid thick teal line), and simulated (thin, light teal lines) composition proportions for the matched six-fishery WCPO bigeye tuna aggregation sensitivity, summed over all years using the variance-adjusted effective sample sizes. Length-composition groups are shown for groups 1--4 and weight-composition groups for groups 5--6; facet labels identify the original BET fisheries pooled into each group. Each simulated line independently simulates the fitted row-level compositions and then pools those simulated counts over all years within group."
 #| fig-height: 6.4
 #| fig-width: 8
 
@@ -2841,7 +2841,7 @@ make_year_comp <- function(kind, fishery, nsim = 12L) {
 ```{r}
 #| echo: false
 #| label: fig-bet-lf12-year-composition
-#| fig-cap: "Year-specific observed, predicted, and simulated length-composition proportions for selected years of WCPO bigeye tuna fishery 12. Unlike the pooled length-composition diagnostics in @fig-bet-lf-diagnostics, this plot does not aggregate over all years; each panel has its own fitted and simulated composition. Panel text gives the variance-adjusted effective N used by the likelihood for that year."
+#| fig-cap: "Year-specific observed (gray bars), predicted (solid thick teal line), and simulated (thin, light teal lines) length-composition proportions for selected years of WCPO bigeye tuna fishery 12. Unlike the pooled length-composition diagnostics in @fig-bet-lf-diagnostics, this plot does not aggregate over all years; each panel has its own fitted and simulated composition. Panel text gives the variance-adjusted effective N used by the likelihood for that year."
 #| fig-height: 7.2
 #| fig-width: 8
 
@@ -2872,7 +2872,7 @@ ggplot() +
 ```{r}
 #| echo: false
 #| label: fig-bet-wf15-year-composition
-#| fig-cap: "Year-specific observed, predicted, and simulated weight-composition proportions for selected years of WCPO bigeye tuna fishery 15. Unlike the pooled weight-composition diagnostics in @fig-bet-wf-diagnostics, this plot does not aggregate over all years; each panel has its own fitted and simulated composition. Panel text gives the variance-adjusted effective N used by the likelihood for that year."
+#| fig-cap: "Year-specific observed (gray bars), predicted (solid thick teal line), and simulated (thin, light teal lines) weight-composition proportions for selected years of WCPO bigeye tuna fishery 15. Unlike the pooled weight-composition diagnostics in @fig-bet-wf-diagnostics, this plot does not aggregate over all years; each panel has its own fitted and simulated composition. Panel text gives the variance-adjusted effective N used by the likelihood for that year."
 #| fig-height: 7.2
 #| fig-width: 8
 
@@ -3113,7 +3113,7 @@ ggplot(bet_rec_plot_df, aes(x = year, y = rdev, colour = model)) +
 ```{r}
 #| echo: false
 #| label: fig-bet-selectivity-length
-#| fig-cap: "Selectivity-at-length curves for WCPO bigeye tuna fisheries. Teal lines show the fitted opal selectivity curves; dashed navy lines show the SS3 reference selectivity curves used to initialise the opal model; dotted coral lines show the MFCL reference selectivity curves."
+#| fig-cap: "Selectivity-at-length curves for WCPO bigeye tuna fisheries. Solid teal lines show the fitted opal selectivity curves; dashed navy lines show the SS3 reference selectivity curves used to initialise the opal model; dotted coral lines show the MFCL reference selectivity curves."
 #| fig-height: 8
 #| fig-width: 8
 
