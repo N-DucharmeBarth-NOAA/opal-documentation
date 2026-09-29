@@ -71,3 +71,5 @@ The specific case studies are indicative and subject to revision; entries marked
 ## Contact
 
 If you are interested in contributing to the development of opal, reach out and open an issue on GitHub: <https://github.com/N-DucharmeBarth-NOAA/opal/issues>.
+
+opal is licensed under the [GNU General Public License, version 3](../LICENSE).
